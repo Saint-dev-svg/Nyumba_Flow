@@ -1,15 +1,13 @@
 import os
 
+from extensions import db
 from dotenv import load_dotenv
 from flask import Flask, jsonify
 from flask_migrate import Migrate
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from sqlalchemy.engine import URL
 
 load_dotenv()
-
-db = SQLAlchemy()
 
 
 def create_app():
@@ -59,6 +57,7 @@ def create_app():
 
 app = create_app()
 
+import models #Register models for Flask-Migrate
 
 if __name__ == "__main__":
     app.run(debug=True)
