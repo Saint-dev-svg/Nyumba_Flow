@@ -24,7 +24,7 @@ class User(db.Model):
     )
     
     properties = db.relationship(
-        "property",
+        "Property",
         back_populates = "owner", 
         cascade = "all, delete-orphan",
     )
@@ -99,26 +99,39 @@ class Tenant(db.Model):
     
 class Lease(db.Model):
     __tablename__ = "leases"
-    
-    id = db.Column(db.Integer, primary_key = True)
-    unit_id = db.Column(db.Integer, db.ForeignKey("units.id", ondelete = "RESTRICT"), nullable = False, index = True)
-    
-    start_date = db.Column(db.Date, nullable = False)
-    end_date = db.Column(db.Date, nullable = True)
-    monthly_rent = db.Column(db.Numeric(12, 2), nullable = False)
-    is_active = db.Column(db.Boolean, nullable = False, default = True)
-    
-    unit = db.relationship("Unit", back_populates = "leases")
-    tenant = db.relationship("Tenant", back_populates = "leases")
-    
-    
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("units.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    # Connects each lease to the tenant occupying the unit.
+    tenant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tenants.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date, nullable=True)
+    monthly_rent = db.Column(db.Numeric(12, 2), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+
+    unit = db.relationship("Unit", back_populates="leases")
+    tenant = db.relationship("Tenant", back_populates="leases")
+
     __table_args__ = (
         CheckConstraint(
-            "end_date is NULL OR end_date >= start_date",
-            name = "ck_lease_dates",
+            "end_date IS NULL OR end_date >= start_date",
+            name="ck_lease_dates",
         ),
         CheckConstraint(
             "monthly_rent >= 0",
-            name = "ck_lease_rent_non_negative"
+            name="ck_lease_rent_nonnegative",
         ),
     )

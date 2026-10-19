@@ -6,6 +6,8 @@ from flask import Flask, jsonify
 from flask_migrate import Migrate
 from sqlalchemy import text
 from sqlalchemy.engine import URL
+from flask_jwt_extended import JWTManager
+from auth import auth_bp
 
 load_dotenv()
 
@@ -24,9 +26,13 @@ def create_app():
 
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = 3600
 
     db.init_app(app)
+    jwt = JWTManager(app)
     Migrate(app, db)
+    app.register_blueprint(auth_bp)
 
     @app.get("/api/health")
     def health_check():
