@@ -8,12 +8,16 @@ from sqlalchemy import text
 from sqlalchemy.engine import URL
 from flask_jwt_extended import JWTManager
 from auth import auth_bp
+from properties import properties_bp
 
 load_dotenv()
 
 
-def create_app():
+def create_app(test_config=None):
     app = Flask(__name__)
+
+    if test_config:
+        app.config.update(test_config)
 
     database_url = URL.create(
         drivername="postgresql+psycopg",
@@ -33,7 +37,7 @@ def create_app():
     jwt = JWTManager(app)
     Migrate(app, db)
     app.register_blueprint(auth_bp)
-
+    app.register_blueprint(properties_bp)
     @app.get("/api/health")
     def health_check():
         return jsonify({

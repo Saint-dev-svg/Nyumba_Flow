@@ -1,24 +1,21 @@
-from app import create_app
+from test_config import create_test_app
 from extensions import db
 from models import User
+import uuid
 
 
 def test_register_landlord():
-    app = create_app()
-    app.config["TESTING"] = True
+    app = create_test_app()
 
     with app.test_client() as client:
         response = client.post(
             "/api/auth/register",
             json={
                 "full_name": "Test Landlord",
-                "email": "test.landlord.10@example.com",
+                "email": f"test.landlord.{uuid.uuid4().hex}@example.com",
                 "password": "SecureTestPassword123!",
             },
         )
-
-        print("Status:", response.status_code)
-        print("Response:", response.get_json())
 
         assert response.status_code == 201
 
@@ -37,9 +34,8 @@ def test_register_landlord():
             
 
 def test_login_with_correct_credentials():
-    app = create_app()
-    app.config["TESTING"] = True
-    
+    app = create_test_app()
+
     with app.test_client() as client:
         #ensure the account exists before attempting login.
         
@@ -76,8 +72,7 @@ def test_login_with_correct_credentials():
         print("Login with correct credentials succeeded!")
         
 def test_login_with_wrong_password():
-    app = create_app()
-    app.config["TESTING"] = True
+    app = create_test_app()
     
     with app.test_client() as client:
         response = client.post(
@@ -95,8 +90,7 @@ def test_login_with_wrong_password():
 
 
 def test_me_rejects_request_without_token():
-    app = create_app()
-    app.config["TESTING"] = True
+    app = create_test_app()
 
     with app.test_client() as client:
         response = client.get("/api/auth/me")
@@ -107,8 +101,7 @@ def test_me_rejects_request_without_token():
 
 
 def test_me_accepts_valid_token():
-    app = create_app()
-    app.config["TESTING"] = True
+    app = create_test_app()
 
     email = "protected.route.test@example.com"
     password = "SecureProtectedPassword123!"
