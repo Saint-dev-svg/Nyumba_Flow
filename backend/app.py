@@ -9,6 +9,7 @@ from sqlalchemy.engine import URL
 from flask_jwt_extended import JWTManager
 from auth import auth_bp
 from properties import properties_bp
+from units import units_bp
 
 load_dotenv()
 
@@ -38,6 +39,7 @@ def create_app(test_config=None):
     Migrate(app, db)
     app.register_blueprint(auth_bp)
     app.register_blueprint(properties_bp)
+    app.register_blueprint(units_bp)
     @app.get("/api/health")
     def health_check():
         return jsonify({
