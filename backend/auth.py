@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, request, jsonify
 from sqlalchemy import func
 from flask_jwt_extended import (
     create_access_token, jwt_required, get_jwt_identity,
@@ -75,7 +75,7 @@ def register():
         db.session.commit()
     except Exception:
         db.session.rollback()
-        auth_bp.logger.exception("Account registration failed")
+        current_app.logger.exception("Account registration failed")
         return jsonify({"error": "Unable to create account right now!"}), 500
 
     access_token = create_access_token(identity=str(user.id))
@@ -168,6 +168,3 @@ def get_current_user():
             "role": user.role,
         }
     }), 200
-
-        
-    

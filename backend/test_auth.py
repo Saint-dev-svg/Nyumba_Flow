@@ -1,140 +1,125 @@
+import uuid
+
+import pytest
+from flask_jwt_extended import create_access_token
+
 from test_config import create_test_app
 from extensions import db
 from models import User
-import uuid
 
 
-def test_register_landlord():
-    app = create_test_app()
+@pytest.fixture
+def app():
+    return create_test_app()
+
+
+@pytest.fixture
+def cleanup_users(app):
+    emails = set()
+    yield emails.add
+
+    with app.app_context():
+        User.query.filter(User.email.in_(emails)).delete(synchronize_session=False)
+        db.session.commit()
+
+
+def unique_email(prefix):
+    return f"{prefix}.{uuid.uuid4().hex}@example.com"
+
+
+def create_user(email, password, full_name="Test Landlord"):
+    user = User(full_name=full_name, email=email, role="landlord")
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
+def test_register_landlord(app, cleanup_users):
+    email = unique_email("test.landlord")
+    cleanup_users(email)
 
     with app.test_client() as client:
         response = client.post(
             "/api/auth/register",
             json={
                 "full_name": "Test Landlord",
-                "email": f"test.landlord.{uuid.uuid4().hex}@example.com",
+                "email": email,
                 "password": "SecureTestPassword123!",
             },
         )
 
-        assert response.status_code == 201
-
-        with app.app_context():
-            user = User.query.filter_by(
-                email="test.landlord@example.com"
-            ).first()
-
-            assert user is not None
-            assert user.password_hash != "SecureTestPassword123!"
-            assert user.check_password("SecureTestPassword123!")
-            assert user.role == "landlord"
-
-            print("Account exists in PostgreSQL.")
-            print("Password is hashed correctly.")
-            
-
-def test_login_with_correct_credentials():
-    app = create_test_app()
-
-    with app.test_client() as client:
-        #ensure the account exists before attempting login.
-        
-        with app.app_context():
-            existing_user = User.query.filter_by(
-                email="login.test.02@example.com"
-            ).first()
-
-            if existing_user is None:
-                existing_user = User(
-                    full_name="Login test Landlord",
-                    email="login.test.02@example.com",
-                    role="landlord",
-                )
-                existing_user.set_password("SecureLoginPassword123!")
-                db.session.add(existing_user)
-                db.session.commit()
-        
-        response = client.post(
-            "/api/auth/login",
-            json = {
-                "email" : "login.test@example.com",
-                "password" : "SecureLoginPassword123!",
-            },
-        )
-        
-        assert response.status_code == 200
-        
-        body = response.get_json()
-        assert body["message"] == "Login successful!"
-        assert body["user"] ["email"] == "login.test@example.com"
-        assert "access_token" in body
-        
-        print("Login with correct credentials succeeded!")
-        
-def test_login_with_wrong_password():
-    app = create_test_app()
-    
-    with app.test_client() as client:
-        response = client.post(
-            "/api/auth/login",
-            json = {
-                "email" : "login.test@example.com",
-                "password" : "secureLoginPassword123!",
-            },
-        )
-        
-        assert response.status_code == 401
-        assert response.get_json()["error"] == "Invalid email or password!"
-        
-        print("Incorrect password was rejected!")
-
-
-def test_me_rejects_request_without_token():
-    app = create_test_app()
-
-    with app.test_client() as client:
-        response = client.get("/api/auth/me")
-
-        assert response.status_code == 401
-
-        print("Unauthenticated request was rejected.")
-
-
-def test_me_accepts_valid_token():
-    app = create_test_app()
-
-    email = "protected.route.test@example.com"
-    password = "SecureProtectedPassword123!"
+    assert response.status_code == 201
 
     with app.app_context():
         user = User.query.filter_by(email=email).first()
 
-        if user is None:
-            user = User(
-                full_name="Protected Route Test",
-                email=email,
-                role="landlord",
-            )
-            user.set_password(password)
-            db.session.add(user)
-            db.session.commit()
+        assert user is not None
+        assert user.password_hash != "SecureTestPassword123!"
+        assert user.check_password("SecureTestPassword123!")
+        assert user.role == "landlord"
 
-        user_id = user.id
+
+def test_login_with_correct_credentials(app, cleanup_users):
+    email = unique_email("login.test")
+    cleanup_users(email)
+
+    with app.app_context():
+        create_user(email, "SecureLoginPassword123!")
 
     with app.test_client() as client:
-        with app.app_context():
-            from flask_jwt_extended import create_access_token
-            token = create_access_token(identity=str(user_id))
+        response = client.post(
+            "/api/auth/login",
+            json={"email": email, "password": "SecureLoginPassword123!"},
+        )
 
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["message"] == "Login successful!"
+    assert body["user"]["email"] == email
+    assert "access_token" in body
+
+
+def test_login_with_wrong_password(app, cleanup_users):
+    email = unique_email("login.test")
+    cleanup_users(email)
+
+    with app.app_context():
+        create_user(email, "SecureLoginPassword123!")
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"email": email, "password": "IncorrectPassword123!"},
+        )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "Invalid email or password!"
+
+
+def test_me_rejects_request_without_token(app):
+    with app.test_client() as client:
+        response = client.get("/api/auth/me")
+
+    assert response.status_code == 401
+
+
+def test_me_accepts_valid_token(app, cleanup_users):
+    email = unique_email("protected.route.test")
+    cleanup_users(email)
+
+    with app.app_context():
+        user = create_user(email, "SecureProtectedPassword123!")
+        user_id = user.id
+        token = create_access_token(identity=str(user_id))
+
+    with app.test_client() as client:
         response = client.get(
             "/api/auth/me",
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        assert response.status_code == 200
-
-        body = response.get_json()
-        assert body["user"]["id"] == user_id
-        assert body["user"]["email"] == email
-
-        print("Valid token granted access to the current user's profile.")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["user"]["id"] == user_id
+    assert body["user"]["email"] == email

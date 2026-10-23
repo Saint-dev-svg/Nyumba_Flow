@@ -15,6 +15,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable = False)
     role = db.Column(db.String(20), nullable = False, default = "landlord")
     created_at = db.Column(db.DateTime(timezone = True), nullable = False, default = lambda: datetime.now(timezone.utc),)
+    tenants = db.relationship("Tenant", back_populates = "owner", cascade = "all, delete-orphan",)
     
     __table_args__ = (
         CheckConstraint(
@@ -34,6 +35,7 @@ class User(db.Model):
         
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+    
     
     
 class Property(db.Model):
@@ -89,6 +91,7 @@ class Tenant(db.Model):
     __tablename__ = "tenants"
     
     id = db.Column(db.Integer, primary_key = True)
+    owner_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete = "CASCADE"), nullable = False, index = True,)
     full_name = db.Column(db.String(120), nullable = False)
     email = db.Column(db.String(255), unique = True, nullable = False, index = True)
     phone_number = db.Column(db.String(30), nullable = True, index = True)
@@ -96,6 +99,7 @@ class Tenant(db.Model):
     created_at = db.Column(db.DateTime(timezone = True), nullable = False, default = lambda: datetime.now(timezone.utc),)
     
     leases = db.relationship("Lease", back_populates = "tenant")
+    owner = db.relationship("User", back_populates = "tenants")
     
 class Lease(db.Model):
     __tablename__ = "leases"

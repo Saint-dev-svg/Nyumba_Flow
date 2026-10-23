@@ -9,6 +9,7 @@ from sqlalchemy.engine import URL
 from flask_jwt_extended import JWTManager
 from auth import auth_bp
 from properties import properties_bp
+from tenants import tenants_bp
 from units import units_bp
 
 load_dotenv()
@@ -16,9 +17,6 @@ load_dotenv()
 
 def create_app(test_config=None):
     app = Flask(__name__)
-
-    if test_config:
-        app.config.update(test_config)
 
     database_url = URL.create(
         drivername="postgresql+psycopg",
@@ -34,11 +32,20 @@ def create_app(test_config=None):
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = 3600
 
+    # Allow explicit test configuration (especially the test database URI) to
+    # override environment-backed defaults.
+    if test_config:
+        app.config.update(test_config)
+
+    if not app.config.get("JWT_SECRET_KEY"):
+        raise RuntimeError("JWT_SECRET_KEY must be set in the environment or app config.")
+
     db.init_app(app)
     jwt = JWTManager(app)
     Migrate(app, db)
     app.register_blueprint(auth_bp)
     app.register_blueprint(properties_bp)
+    app.register_blueprint(tenants_bp)
     app.register_blueprint(units_bp)
     @app.get("/api/health")
     def health_check():
