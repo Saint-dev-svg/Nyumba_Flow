@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import selectinload
 
 from extensions import db
 from models import (
@@ -81,6 +82,11 @@ def _payment_to_dict(payment):
             {
                 "charge_id": allocation.charge_id,
                 "amount": str(allocation.amount),
+                "charge_category": allocation.charge.category,
+                "charge_description": allocation.charge.description,
+                "invoice_id": allocation.charge.invoice_id,
+                "invoice_period_start": allocation.charge.invoice.period_start.isoformat(),
+                "invoice_period_end": allocation.charge.invoice.period_end.isoformat(),
             }
             for allocation in sorted(
                 payment.allocations,
@@ -99,6 +105,23 @@ def _receipt_to_dict(receipt):
         "amount": str(receipt.amount),
         "currency": receipt.currency,
         "issued_at": receipt.issued_at.isoformat(),
+    }
+
+
+def _payment_history_options():
+    return (
+        selectinload(Payment.tenant),
+        selectinload(Payment.receipt),
+        selectinload(Payment.allocations)
+        .selectinload(PaymentAllocation.charge)
+        .selectinload(Charge.invoice),
+    )
+
+
+def _payment_history_dict(payment):
+    return {
+        **_payment_to_dict(payment),
+        "tenant": _tenant_to_dict(payment.tenant),
     }
 
 
@@ -298,4 +321,86 @@ def allocate_payment(payment_id):
             }
             for charge_id in requested_by_charge
         ],
+    }), 200
+
+
+@payments_bp.get("")
+@jwt_required()
+def list_payments():
+    landlord_id = _landlord_id()
+    if landlord_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
+
+    payments = (
+        Payment.query
+        .join(Tenant, Payment.tenant_id == Tenant.id)
+        .filter(Tenant.owner_id == landlord_id)
+        .order_by(Payment.received_at.desc(), Payment.id.desc())
+        .options(*_payment_history_options())
+        .all()
+    )
+
+    return jsonify({
+        "payments": [_payment_history_dict(payment) for payment in payments],
+        "count": len(payments),
+    }), 200
+
+
+@payments_bp.get("/<int:payment_id>")
+@jwt_required()
+def get_payment(payment_id):
+    landlord_id = _landlord_id()
+    if landlord_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
+
+    payment = (
+        Payment.query
+        .join(Tenant, Payment.tenant_id == Tenant.id)
+        .filter(
+            Payment.id == payment_id,
+            Tenant.owner_id == landlord_id,
+        )
+        .options(*_payment_history_options())
+        .first()
+    )
+
+    if payment is None:
+        return jsonify({"error": "Payment not found."}), 404
+
+    return jsonify({
+        "payment": _payment_history_dict(payment)
+    }), 200
+
+
+@payments_bp.get("/<int:payment_id>/receipt")
+@jwt_required()
+def get_payment_receipt(payment_id):
+    landlord_id = _landlord_id()
+    if landlord_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
+
+    payment = (
+        Payment.query
+        .join(Tenant, Payment.tenant_id == Tenant.id)
+        .filter(
+            Payment.id == payment_id,
+            Tenant.owner_id == landlord_id,
+        )
+        .options(*_payment_history_options())
+        .first()
+    )
+    if payment is None or payment.receipt is None:
+        return jsonify({"error": "Receipt not found."}), 404
+
+    payment_details = _payment_history_dict(payment)
+    payment_details.pop("receipt", None)
+    return jsonify({
+        "receipt": _receipt_to_dict(payment.receipt),
+        "payment": payment_details,
     }), 200

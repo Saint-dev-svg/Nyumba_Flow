@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from flask_jwt_extended import create_access_token
@@ -380,4 +380,221 @@ def test_landlord_cannot_record_or_allocate_for_another_landlord(app, cleanup_re
 
     assert foreign_tenant_payment.status_code == 404
     assert foreign_charge_allocation.status_code == 404
+
+
+def test_list_payments_returns_only_landlords_payments_newest_first(
+    app, cleanup_records
+):
+    with app.app_context():
+        landlord_a = create_landlord()
+        tenant_a1 = create_tenant(landlord_a.id)
+        tenant_a2 = create_tenant(landlord_a.id)
+        record_setup(cleanup_records, landlord_a, tenant_a1)
+        record_setup(cleanup_records, landlord_a, tenant_a2)
+        landlord_b = create_landlord()
+        tenant_b = create_tenant(landlord_b.id)
+        record_setup(cleanup_records, landlord_b, tenant_b)
+        landlord_a_id, landlord_b_id = landlord_a.id, landlord_b.id
+        tenant_a1_id, tenant_a2_id, tenant_b_id = tenant_a1.id, tenant_a2.id, tenant_b.id
+        headers_a, headers_b = auth_headers(landlord_a_id), auth_headers(landlord_b_id)
+
+    with app.test_client() as client:
+        first = record_payment(client, headers_a, tenant_a1_id, "900.00")
+        second = record_payment(client, headers_a, tenant_a2_id, "1200.00")
+        foreign = record_payment(client, headers_b, tenant_b_id, "500.00")
+        assert first.status_code == second.status_code == foreign.status_code == 201
+        first_payment = first.get_json()["payment"]
+        second_payment = second.get_json()["payment"]
+        foreign_payment = foreign.get_json()["payment"]
+        cleanup_records["payments"].update({
+            first_payment["id"], second_payment["id"], foreign_payment["id"]
+        })
+
+        response = client.get("/api/payments", headers=headers_a)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["count"] == 2
+    payments = body["payments"]
+    assert {payment["tenant_id"] for payment in payments} == {tenant_a1_id, tenant_a2_id}
+    assert all(payment["tenant"]["full_name"] == "Payment API Test Tenant" for payment in payments)
+    assert all("receipt" in payment for payment in payments)
+    assert all("allocations" in payment for payment in payments)
+
+    expected = sorted(
+        [first_payment, second_payment],
+        key=lambda payment: (
+            datetime.fromisoformat(payment["received_at"]),
+            payment["id"],
+        ),
+        reverse=True,
+    )
+    assert [payment["id"] for payment in payments] == [
+        payment["id"] for payment in expected
+    ]
+
+
+def test_empty_payment_history_returns_empty_list(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        record_setup(cleanup_records, landlord, create_tenant(landlord.id))
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        response = client.get("/api/payments", headers=headers)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"payments": [], "count": 0}
+
+
+def test_get_payment_returns_details_and_allocation_history(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        landlord_id, tenant_id, lease_id = landlord.id, tenant.id, lease.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease_id)
+        cleanup_records["invoices"].add(invoice["id"])
+        charge = next(item for item in invoice["charges"] if item["category"] == "rent")
+        recorded = record_payment(client, headers, tenant_id, "1500.00")
+        assert recorded.status_code == 201
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+        allocation = client.post(
+            f"/api/payments/{payment['id']}/allocations",
+            json={"allocations": [{"charge_id": charge["id"], "amount": "500.00"}]},
+            headers=headers,
+        )
+        assert allocation.status_code == 200
+        response = client.get(f"/api/payments/{payment['id']}", headers=headers)
+
+    assert response.status_code == 200
+    body = response.get_json()["payment"]
+    assert body["id"] == payment["id"]
+    assert body["tenant_id"] == tenant_id
+    assert body["tenant"]["full_name"] == "Payment API Test Tenant"
+    assert body["amount"] == "1500.00"
+    assert body["allocated_amount"] == "500.00"
+    assert body["unallocated_amount"] == "1000.00"
+    assert body["allocations"][0]["charge_id"] == charge["id"]
+    assert body["allocations"][0]["charge_category"] == "rent"
+    assert body["allocations"][0]["invoice_id"] == invoice["id"]
+    assert body["receipt"]["receipt_number"] == payment["receipt"]["receipt_number"]
+
+
+def test_get_payment_receipt_returns_receipt_and_payment_details(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        record_setup(cleanup_records, landlord, tenant)
+        landlord_id, tenant_id = landlord.id, tenant.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        recorded = record_payment(client, headers, tenant_id, "2600.00")
+        assert recorded.status_code == 201
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+        response = client.get(
+            f"/api/payments/{payment['id']}/receipt",
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    receipt = body["receipt"]
+    assert receipt["receipt_number"] == payment["receipt"]["receipt_number"]
+    assert receipt["recipient_name"] == "Payment API Test Tenant"
+    assert receipt["amount"] == "2600.00"
+    assert receipt["currency"] == "KES"
+    assert receipt["issued_at"]
+    assert body["payment"]["id"] == payment["id"]
+    assert body["payment"]["tenant"]["id"] == tenant_id
+    assert body["payment"]["method"] == "cash"
+
+
+def test_nonexistent_payment_and_receipt_return_404(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        record_setup(cleanup_records, landlord, create_tenant(landlord.id))
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        detail = client.get("/api/payments/999999999", headers=headers)
+        receipt = client.get("/api/payments/999999999/receipt", headers=headers)
+
+    assert detail.status_code == 404
+    assert receipt.status_code == 404
+
+
+def test_other_landlord_cannot_access_payment_or_receipt(app, cleanup_records):
+    with app.app_context():
+        owner = create_landlord()
+        tenant = create_tenant(owner.id)
+        record_setup(cleanup_records, owner, tenant)
+        other = create_landlord()
+        owner_headers, other_headers = auth_headers(owner.id), auth_headers(other.id)
+        tenant_id = tenant.id
+        record_setup(cleanup_records, other, create_tenant(other.id))
+
+    with app.test_client() as client:
+        recorded = record_payment(client, owner_headers, tenant_id, "800.00")
+        assert recorded.status_code == 201
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+        detail = client.get(
+            f"/api/payments/{payment['id']}",
+            headers=other_headers,
+        )
+        receipt = client.get(
+            f"/api/payments/{payment['id']}/receipt",
+            headers=other_headers,
+        )
+
+    assert detail.status_code == 404
+    assert receipt.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/payments", "/api/payments/1", "/api/payments/1/receipt"],
+)
+def test_payment_history_and_receipt_routes_require_authentication(app, path):
+    with app.test_client() as client:
+        response = client.get(path)
+
+    assert response.status_code == 401
+
+
+def test_missing_receipt_returns_404(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        record_setup(cleanup_records, landlord, tenant)
+        payment = Payment(
+            tenant_id=tenant.id,
+            amount="500.00",
+            currency="KES",
+            method="cash",
+        )
+        db.session.add(payment)
+        db.session.commit()
+        payment_id = payment.id
+        cleanup_records["payments"].add(payment_id)
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        response = client.get(
+            f"/api/payments/{payment_id}/receipt",
+            headers=headers,
+        )
+
+    assert response.status_code == 404
 
