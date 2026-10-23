@@ -124,7 +124,7 @@ class Lease(db.Model):
     start_date = db.Column(db.Date, nullable=False)
     end_date = db.Column(db.Date, nullable=True)
     monthly_rent = db.Column(db.Numeric(12, 2), nullable=False)
-    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=False)
 
     unit = db.relationship("Unit", back_populates="leases")
     tenant = db.relationship("Tenant", back_populates="leases")
