@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import URL
 from flask_jwt_extended import JWTManager
 from auth import auth_bp
+from invoices import invoices_bp
 from leases import leases_bp
 from properties import properties_bp
 from tenants import tenants_bp
@@ -45,6 +46,7 @@ def create_app(test_config=None):
     jwt = JWTManager(app)
     Migrate(app, db)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(invoices_bp)
     app.register_blueprint(leases_bp)
     app.register_blueprint(properties_bp)
     app.register_blueprint(tenants_bp)
