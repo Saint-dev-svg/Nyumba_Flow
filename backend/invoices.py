@@ -80,6 +80,22 @@ def _owned_invoices(landlord_id):
 
 
 def _invoice_to_dict(invoice):
+    charge_balances = []
+    for charge in invoice.charges:
+        paid_amount = sum(
+            (Decimal(allocation.amount) for allocation in charge.allocations),
+            Decimal("0.00"),
+        )
+        charge_balances.append((charge, paid_amount, Decimal(charge.amount) - paid_amount))
+
+    total_amount = sum(
+        (Decimal(charge.amount) for charge, _, _ in charge_balances),
+        Decimal("0.00"),
+    )
+    total_paid = sum(
+        (paid for _, paid, _ in charge_balances),
+        Decimal("0.00"),
+    )
     return {
         "id": invoice.id,
         "lease_id": invoice.lease_id,
@@ -88,12 +104,17 @@ def _invoice_to_dict(invoice):
         "due_date": invoice.due_date.isoformat(),
         "status": invoice.status,
         "issued_at": invoice.issued_at.isoformat() if invoice.issued_at else None,
+        "total_amount": str(total_amount),
+        "paid_amount": str(total_paid),
+        "outstanding_balance": str(total_amount - total_paid),
         "charges": [
             {
                 "id": charge.id,
                 "category": charge.category,
                 "description": charge.description,
                 "amount": str(charge.amount),
+                "paid_amount": str(paid_amount),
+                "outstanding_balance": str(outstanding),
                 "utility_breakdowns": [
                     {
                         "category": breakdown.category,
@@ -105,7 +126,7 @@ def _invoice_to_dict(invoice):
                     )
                 ],
             }
-            for charge in invoice.charges
+            for charge, paid_amount, outstanding in charge_balances
         ],
     }
 
