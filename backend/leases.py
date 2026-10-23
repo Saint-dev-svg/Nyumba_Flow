@@ -2,27 +2,16 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from extensions import db
-from models import Lease, Property, Tenant, Unit, User
+from models import Lease, Property, Tenant, Unit
+from authorization import get_current_landlord_id
 
 
 leases_bp = Blueprint("leases", __name__, url_prefix="/api/leases")
-
-
-def _landlord_id():
-    try:
-        user_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return None
-
-    landlord = db.session.get(User, user_id)
-    if landlord is None or landlord.role != "landlord":
-        return None
-    return landlord.id
 
 
 def _parse_date(value, field_name, *, optional=False):
@@ -95,7 +84,7 @@ def _find_overlap(lease):
 @leases_bp.post("")
 @jwt_required()
 def create_lease():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -162,7 +151,7 @@ def create_lease():
 @leases_bp.get("")
 @jwt_required()
 def list_leases():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -180,7 +169,7 @@ def list_leases():
 @leases_bp.get("/<int:lease_id>")
 @jwt_required()
 def get_lease(lease_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -193,7 +182,7 @@ def get_lease(lease_id):
 @leases_bp.post("/<int:lease_id>/activate")
 @jwt_required()
 def activate_lease(lease_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -227,7 +216,7 @@ def activate_lease(lease_id):
 @leases_bp.post("/<int:lease_id>/end")
 @jwt_required()
 def end_lease(lease_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 

@@ -5,14 +5,14 @@ from flask_jwt_extended import create_access_token
 import uuid
 
 
-def create_test_user(email):
+def create_test_user(email, *, role="landlord"):
     user = User.query.filter_by(email=email).first()
 
     if user is None:
         user = User(
             full_name="Property Test Landlord",
             email=email,
-            role="landlord",
+            role=role,
         )
         user.set_password("SecurePropertyPassword123!")
         db.session.add(user)
@@ -161,3 +161,30 @@ def test_list_properties_requires_authentication():
         response = client.get("/api/properties")
 
     assert response.status_code == 401
+
+
+def test_manager_cannot_create_or_list_properties():
+    app = create_test_app()
+    email = f"property.manager.{uuid.uuid4().hex}@example.com"
+
+    with app.app_context():
+        manager = create_test_user(email, role="manager")
+        manager_id = manager.id
+        token = create_access_token(identity=str(manager_id))
+
+    headers = {"Authorization": f"Bearer {token}"}
+    with app.test_client() as client:
+        create_response = client.post(
+            "/api/properties",
+            json={"name": "Manager Property", "address": "Rongai, Kenya"},
+            headers=headers,
+        )
+        list_response = client.get("/api/properties", headers=headers)
+
+    assert create_response.status_code == 403
+    assert list_response.status_code == 403
+
+    with app.app_context():
+        manager = db.session.get(User, manager_id)
+        db.session.delete(manager)
+        db.session.commit()

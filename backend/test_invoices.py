@@ -416,3 +416,27 @@ def test_retrieving_nonexistent_invoice_returns_404(app):
         )
 
     assert response.status_code == 404
+
+
+def test_manager_is_forbidden_from_invoice_management_routes(app, cleanup_records):
+    with app.app_context():
+        manager = User(
+            full_name="Invoice API Test Manager",
+            email=f"invoice.manager.{uuid.uuid4().hex}@example.com",
+            role="manager",
+        )
+        manager.set_password("SecureInvoiceManagerPassword123!")
+        db.session.add(manager)
+        db.session.commit()
+        cleanup_records["users"].add(manager.id)
+        headers = auth_headers(manager.id)
+
+    with app.test_client() as client:
+        responses = [
+            client.post("/api/invoices", json={}, headers=headers),
+            client.get("/api/invoices", headers=headers),
+            client.get("/api/invoices/1", headers=headers),
+            client.post("/api/invoices/1/issue", headers=headers),
+        ]
+
+    assert [response.status_code for response in responses] == [403] * 4

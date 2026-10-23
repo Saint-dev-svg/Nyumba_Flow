@@ -1,9 +1,10 @@
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy.exc import IntegrityError
 
+from authorization import get_current_landlord_id
 from extensions import db
 from models import Property, Unit
 
@@ -38,7 +39,11 @@ def get_owned_property(property_id, owner_id):
 @units_bp.post("")
 @jwt_required()
 def create_unit(property_id):
-    owner_id = int(get_jwt_identity())
+    owner_id = get_current_landlord_id()
+    if owner_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
 
     property_obj = get_owned_property(property_id, owner_id)
 
@@ -116,7 +121,11 @@ def create_unit(property_id):
 @units_bp.get("")
 @jwt_required()
 def list_units(property_id):
-    owner_id = int(get_jwt_identity())
+    owner_id = get_current_landlord_id()
+    if owner_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
 
     property_obj = get_owned_property(property_id, owner_id)
 

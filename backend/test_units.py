@@ -3,7 +3,7 @@ import uuid
 from flask_jwt_extended import create_access_token
 
 from extensions import db
-from models import Property, Unit
+from models import Property, Unit, User
 from test_config import create_test_app
 
 from test_properties import create_test_user
@@ -201,3 +201,47 @@ def test_list_units_requires_authentication():
         response = client.get(f"/api/properties/{property_id}/units")
 
     assert response.status_code == 401
+
+
+def test_manager_cannot_create_or_list_units():
+    app = create_test_app()
+
+    with app.app_context():
+        manager = User(
+            full_name="Unit API Test Manager",
+            email=f"unit.manager.{uuid.uuid4().hex}@example.com",
+            role="manager",
+        )
+        manager.set_password("SecureUnitManagerPassword123!")
+        db.session.add(manager)
+        db.session.commit()
+        manager_id = manager.id
+        property_obj = create_test_property(manager_id)
+        property_id = property_obj.id
+        token = create_access_token(identity=str(manager_id))
+
+    headers = {"Authorization": f"Bearer {token}"}
+    with app.test_client() as client:
+        create_response = client.post(
+            f"/api/properties/{property_id}/units",
+            json={
+                "unit_number": "M1",
+                "bedrooms": 1,
+                "monthly_rent": "10000.00",
+            },
+            headers=headers,
+        )
+        list_response = client.get(
+            f"/api/properties/{property_id}/units",
+            headers=headers,
+        )
+
+    assert create_response.status_code == 403
+    assert list_response.status_code == 403
+
+    with app.app_context():
+        property_obj = db.session.get(Property, property_id)
+        db.session.delete(property_obj)
+        manager = db.session.get(User, manager_id)
+        db.session.delete(manager)
+        db.session.commit()

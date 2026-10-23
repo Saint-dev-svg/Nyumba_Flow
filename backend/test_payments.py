@@ -598,3 +598,36 @@ def test_missing_receipt_returns_404(app, cleanup_records):
 
     assert response.status_code == 404
 
+
+def test_manager_is_forbidden_from_payment_management_routes(app, cleanup_records):
+    with app.app_context():
+        manager = User(
+            full_name="Payment API Test Manager",
+            email=f"payment.manager.{uuid.uuid4().hex}@example.com",
+            role="manager",
+        )
+        manager.set_password("SecurePaymentManagerPassword123!")
+        db.session.add(manager)
+        db.session.commit()
+        cleanup_records["users"].add(manager.id)
+        headers = auth_headers(manager.id)
+
+    with app.test_client() as client:
+        responses = [
+            client.post(
+                "/api/payments",
+                json={"tenant_id": 1, "amount": "100.00", "method": "cash"},
+                headers=headers,
+            ),
+            client.get("/api/payments", headers=headers),
+            client.get("/api/payments/1", headers=headers),
+            client.get("/api/payments/1/receipt", headers=headers),
+            client.post(
+                "/api/payments/1/allocations",
+                json={"allocations": []},
+                headers=headers,
+            ),
+        ]
+
+    assert [response.status_code for response in responses] == [403] * 5
+

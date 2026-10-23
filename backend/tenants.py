@@ -1,10 +1,11 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import Tenant, User
+from models import Tenant
+from authorization import get_current_landlord_id
 
 
 tenants_bp = Blueprint("tenants", __name__, url_prefix="/api/tenants")
@@ -15,18 +16,6 @@ _EDITABLE_FIELDS = {
     "phone_number",
     "national_id_last4",
 }
-
-
-def _landlord_id():
-    try:
-        user_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return None
-
-    landlord = db.session.get(User, user_id)
-    if landlord is None or landlord.role != "landlord":
-        return None
-    return landlord.id
 
 
 def _tenant_to_dict(tenant):
@@ -107,7 +96,7 @@ def _email_in_use(email, *, excluding_tenant_id=None):
 @tenants_bp.post("")
 @jwt_required()
 def create_tenant():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -134,7 +123,7 @@ def create_tenant():
 @tenants_bp.get("")
 @jwt_required()
 def list_tenants():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -153,7 +142,7 @@ def list_tenants():
 @tenants_bp.get("/<int:tenant_id>")
 @jwt_required()
 def get_tenant(tenant_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -166,7 +155,7 @@ def get_tenant(tenant_id):
 @tenants_bp.patch("/<int:tenant_id>")
 @jwt_required()
 def update_tenant(tenant_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 

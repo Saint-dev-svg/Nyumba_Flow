@@ -2,26 +2,15 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from extensions import db
-from models import Charge, Invoice, Lease, Property, Tenant, Unit, User, UtilityBreakdown
+from models import Charge, Invoice, Lease, Property, Tenant, Unit, UtilityBreakdown
+from authorization import get_current_landlord_id
 
 
 invoices_bp = Blueprint("invoices", __name__, url_prefix="/api/invoices")
-
-
-def _landlord_id():
-    try:
-        user_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return None
-
-    landlord = db.session.get(User, user_id)
-    if landlord is None or landlord.role != "landlord":
-        return None
-    return landlord.id
 
 
 def _parse_date(value, field_name):
@@ -199,7 +188,7 @@ def _parse_charges(raw_charges):
 @invoices_bp.post("")
 @jwt_required()
 def create_invoice():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -279,7 +268,7 @@ def create_invoice():
 @invoices_bp.get("")
 @jwt_required()
 def list_invoices():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -300,7 +289,7 @@ def list_invoices():
 @invoices_bp.post("/<int:invoice_id>/issue")
 @jwt_required()
 def issue_invoice(invoice_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -328,7 +317,7 @@ def issue_invoice(invoice_id):
 @invoices_bp.get("/<int:invoice_id>")
 @jwt_required()
 def get_invoice(invoice_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({
             "error": "An authenticated landlord account is required."

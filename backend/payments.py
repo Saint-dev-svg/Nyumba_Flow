@@ -2,12 +2,13 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from extensions import db
+from authorization import get_current_landlord_id
 from models import (
     Charge,
     Invoice,
@@ -26,17 +27,6 @@ payments_bp = Blueprint("payments", __name__, url_prefix="/api/payments")
 ZERO = Decimal("0.00")
 MAX_AMOUNT = Decimal("9999999999.99")
 PAYMENT_METHODS = {"cash", "bank_transfer", "M-pesa", "other"}
-
-
-def _landlord_id():
-    try:
-        user_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return None
-    landlord = db.session.get(User, user_id)
-    if landlord is None or landlord.role != "landlord":
-        return None
-    return landlord.id
 
 
 def _parse_amount(value, field, *, allow_zero=False):
@@ -154,7 +144,7 @@ def _charge_access_query(landlord_id, tenant_id, charge_ids):
 @payments_bp.post("")
 @jwt_required()
 def record_payment():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -220,7 +210,7 @@ def record_payment():
 @payments_bp.post("/<int:payment_id>/allocations")
 @jwt_required()
 def allocate_payment(payment_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({"error": "An authenticated landlord account is required."}), 403
 
@@ -327,7 +317,7 @@ def allocate_payment(payment_id):
 @payments_bp.get("")
 @jwt_required()
 def list_payments():
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({
             "error": "An authenticated landlord account is required."
@@ -351,7 +341,7 @@ def list_payments():
 @payments_bp.get("/<int:payment_id>")
 @jwt_required()
 def get_payment(payment_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({
             "error": "An authenticated landlord account is required."
@@ -379,7 +369,7 @@ def get_payment(payment_id):
 @payments_bp.get("/<int:payment_id>/receipt")
 @jwt_required()
 def get_payment_receipt(payment_id):
-    landlord_id = _landlord_id()
+    landlord_id = get_current_landlord_id()
     if landlord_id is None:
         return jsonify({
             "error": "An authenticated landlord account is required."

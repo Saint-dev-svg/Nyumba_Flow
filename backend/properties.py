@@ -1,8 +1,9 @@
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from sqlalchemy.exc import IntegrityError
 
+from authorization import get_current_landlord_id
 from extensions import db
 from models import Property
 
@@ -27,6 +28,12 @@ def property_to_dict(property):
 @properties_bp.post("")
 @jwt_required()
 def create_property():
+    owner_id = get_current_landlord_id()
+    if owner_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
+
     data = request.get_json(silent=True)
 
     if not isinstance(data, dict):
@@ -50,8 +57,6 @@ def create_property():
         return jsonify({
             "error": "Property address is required and must be at most 255 characters."
         }), 400
-
-    owner_id = int(get_jwt_identity())
 
     property = Property(
         owner_id=owner_id,
@@ -77,7 +82,11 @@ def create_property():
 @properties_bp.get("")
 @jwt_required()
 def list_properties():
-    owner_id = int(get_jwt_identity())
+    owner_id = get_current_landlord_id()
+    if owner_id is None:
+        return jsonify({
+            "error": "An authenticated landlord account is required."
+        }), 403
 
     properties = (
         Property.query
