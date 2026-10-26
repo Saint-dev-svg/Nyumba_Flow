@@ -968,6 +968,186 @@ button.nav-item {
   font-weight: 400;
 }
 
+.management-fields select {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid #cfd5cd;
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.management-fields select:focus {
+  border-color: var(--color-accent);
+  outline: 3px solid rgb(69 107 85 / 16%);
+  outline-offset: 1px;
+}
+
+.management-fields select:disabled {
+  background: #f6f7f4;
+}
+
+.form-guidance,
+.form-warning {
+  margin: 0 0 17px;
+  padding: 11px 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #f8f9f6;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.form-warning {
+  border-color: #eadfbe;
+  background: #fbf8ef;
+  color: #76663d;
+}
+
+.lease-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lease-list-card {
+  display: flex;
+  width: 100%;
+  min-height: 86px;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  color: inherit;
+  text-align: left;
+}
+
+.lease-list-card:hover {
+  border-color: #cbd4ca;
+  background: #fdfefc;
+}
+
+.lease-indicator {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #a8aea8;
+}
+
+.lease-indicator.is-active {
+  background: var(--color-accent);
+}
+
+.lease-list-main {
+  display: grid;
+  min-width: 130px;
+  flex: 1;
+  gap: 5px;
+}
+
+.lease-list-main strong {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.lease-list-main > span,
+.lease-list-dates {
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.lease-list-dates {
+  min-width: 155px;
+}
+
+.lease-list-rent {
+  display: grid;
+  min-width: 112px;
+  gap: 4px;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lease-list-rent small {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.lease-detail-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.lease-detail-card > div {
+  min-width: 0;
+  padding: 18px 21px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.lease-detail-card > div:nth-child(odd) {
+  border-right: 1px solid var(--color-border);
+}
+
+.lease-detail-card > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.lease-detail-card dt {
+  margin-bottom: 7px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.lease-detail-card dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.lease-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.lease-actions .form-guidance {
+  margin: 0;
+}
+
+.lease-action-error {
+  margin-top: 18px;
+}
+
+.lease-end-form {
+  max-width: 550px;
+  margin-top: 24px;
+}
+
+.lease-end-form .management-form-actions {
+  align-items: center;
+  gap: 18px;
+}
+
 .property-list {
   display: grid;
   gap: 10px;
@@ -1299,6 +1479,53 @@ button.nav-item {
 
   .tenant-detail-card > div:last-child {
     border-bottom: 0;
+  }
+
+  .lease-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .lease-list-card {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding: 14px;
+  }
+
+  .lease-list-main {
+    min-width: calc(100% - 34px);
+  }
+
+  .lease-list-dates {
+    min-width: 0;
+    flex: 1;
+    padding-left: 20px;
+  }
+
+  .lease-list-rent {
+    min-width: 100px;
+  }
+
+  .lease-detail-card {
+    grid-template-columns: 1fr;
+  }
+
+  .lease-detail-card > div,
+  .lease-detail-card > div:nth-child(odd) {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .lease-detail-card > div:last-child {
+    border-bottom: 0;
+  }
+
+  .lease-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .lease-actions .compact-button {
+    align-self: flex-start;
   }
 }
 

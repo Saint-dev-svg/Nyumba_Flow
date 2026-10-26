@@ -142,7 +142,7 @@ const navigationItems = [
   { label: 'Overview', available: true },
   { label: 'Properties', available: true },
   { label: 'Tenants', available: true },
-  { label: 'Leases', available: false },
+  { label: 'Leases', available: true },
   { label: 'Invoices', available: false },
   { label: 'Payments', available: false },
 ]
@@ -833,6 +833,397 @@ function TenantsPage() {
   )
 }
 
+function LeaseForm({ tenants, properties, units, leases, onCancel, onCreated }) {
+  const [tenantId, setTenantId] = useState('')
+  const [unitId, setUnitId] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [monthlyRent, setMonthlyRent] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const activeUnits = units.filter((unit) => unit.is_active)
+  const selectedUnit = activeUnits.find((unit) => String(unit.id) === unitId)
+  const selectedTenant = tenants.find((tenant) => String(tenant.id) === tenantId)
+  const hasOverlap = Boolean(selectedUnit && startDate && leases.some((lease) => (
+    lease.is_active && lease.unit_id === selectedUnit.id && leaseOverlaps(lease, startDate, endDate || null)
+  )))
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setError('')
+    if (!tenantId || !selectedTenant) {
+      setError('Select a tenant for this lease.')
+      return
+    }
+    if (!unitId || !selectedUnit) {
+      setError('Select an active unit for this lease.')
+      return
+    }
+    if (!startDate) {
+      setError('A start date is required.')
+      return
+    }
+    if (endDate && endDate < startDate) {
+      setError('End date cannot be before start date.')
+      return
+    }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(monthlyRent.trim())) {
+      setError('Enter a non-negative monthly rent with no more than two decimal places.')
+      return
+    }
+    const wholeRent = monthlyRent.trim().split('.')[0].replace(/^0+/, '') || '0'
+    if (wholeRent.length > 10) {
+      setError('Agreed monthly rent is too large.')
+      return
+    }
+
+    const body = {
+      tenant_id: Number(tenantId),
+      unit_id: Number(unitId),
+      start_date: startDate,
+      monthly_rent: monthlyRent.trim(),
+    }
+    if (endDate) body.end_date = endDate
+
+    setIsSaving(true)
+    try {
+      await apiRequest('/api/leases', { method: 'POST', authenticated: true, body })
+      onCreated()
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to create this lease. Please try again.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <form className="management-form" onSubmit={handleSubmit} noValidate aria-labelledby="lease-form-title">
+      <div className="management-form-heading">
+        <h3 id="lease-form-title">Create lease</h3>
+        <button className="text-button" type="button" onClick={onCancel} disabled={isSaving}>Cancel</button>
+      </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {(tenants.length === 0 || activeUnits.length === 0) && (
+        <p className="form-guidance">
+          {tenants.length === 0 && activeUnits.length === 0
+            ? 'Register a tenant and add an active unit before creating a lease.'
+            : tenants.length === 0
+              ? 'Register a tenant before creating a lease.'
+              : 'Add an active unit to a property before creating a lease.'}
+        </p>
+      )}
+      <div className="management-fields lease-fields">
+        <div className="field-group">
+          <label htmlFor="lease-tenant">Tenant</label>
+          <select id="lease-tenant" value={tenantId} disabled={isSaving || tenants.length === 0} required onChange={(event) => setTenantId(event.target.value)}>
+            <option value="">Select a tenant</option>
+            {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.full_name} — {tenant.email}</option>)}
+          </select>
+        </div>
+        <div className="field-group">
+          <label htmlFor="lease-unit">Active unit</label>
+          <select id="lease-unit" value={unitId} disabled={isSaving || activeUnits.length === 0} required onChange={(event) => setUnitId(event.target.value)}>
+            <option value="">Select a unit</option>
+            {activeUnits.map((unit) => {
+              const property = properties.find((item) => item.id === unit.property_id)
+              return <option key={unit.id} value={unit.id}>{property?.name || 'Property'} — Unit {unit.unit_number}</option>
+            })}
+          </select>
+        </div>
+        <div className="field-group">
+          <label htmlFor="lease-start-date">Start date</label>
+          <input id="lease-start-date" type="date" value={startDate} disabled={isSaving} required onChange={(event) => setStartDate(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="lease-end-date">End date <span className="optional-label">Optional</span></label>
+          <input id="lease-end-date" type="date" min={startDate || undefined} value={endDate} disabled={isSaving} onChange={(event) => setEndDate(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="lease-monthly-rent">Agreed monthly rent (KES)</label>
+          <input id="lease-monthly-rent" type="text" inputMode="decimal" placeholder="e.g. 15000.00" value={monthlyRent} disabled={isSaving} required onChange={(event) => setMonthlyRent(event.target.value)} />
+        </div>
+      </div>
+      {hasOverlap && (
+        <p className="form-warning" role="status">
+          An active lease overlaps these dates for this unit. The lease can be saved inactive, but the backend will reject activation while the overlap remains.
+        </p>
+      )}
+      <div className="management-form-actions">
+        <button className="primary-button compact-button" type="submit" disabled={isSaving || tenants.length === 0 || activeUnits.length === 0}>
+          {isSaving ? 'Saving…' : 'Create lease'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function leaseOverlaps(lease, startDate, endDate) {
+  const startsBeforeNewEnd = !endDate || lease.start_date <= endDate
+  const endsAfterNewStart = !lease.end_date || lease.end_date >= startDate
+  return startsBeforeNewEnd && endsAfterNewStart
+}
+
+function LeasesPage() {
+  const [data, setData] = useState({ loading: true, leases: [], tenants: [], properties: [], units: [], error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+  const [selectedLeaseId, setSelectedLeaseId] = useState(null)
+  const [leaseDetails, setLeaseDetails] = useState({ loading: false, lease: null, error: '' })
+  const [detailRetry, setDetailRetry] = useState(0)
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [isEnding, setIsEnding] = useState(false)
+  const [endDate, setEndDate] = useState('')
+  const [actionState, setActionState] = useState({ busy: false, error: '' })
+
+  useEffect(() => {
+    let isCurrent = true
+    async function fetchPageData() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const [leaseResult, tenantResult, propertyResult] = await Promise.all([
+          apiRequest('/api/leases', { authenticated: true }),
+          apiRequest('/api/tenants', { authenticated: true }),
+          apiRequest('/api/properties', { authenticated: true }),
+        ])
+        if (!Array.isArray(leaseResult?.leases) || !Array.isArray(tenantResult?.tenants) || !Array.isArray(propertyResult?.properties)) {
+          throw new Error('Lease information could not be read. Please try again.')
+        }
+        const unitResults = await Promise.all(propertyResult.properties.map(async (property) => {
+          const result = await apiRequest(`/api/properties/${encodeURIComponent(property.id)}/units`, { authenticated: true })
+          if (!Array.isArray(result?.units)) throw new Error('Unit information could not be read. Please try again.')
+          return result.units
+        }))
+        if (isCurrent) {
+          setData({
+            loading: false,
+            leases: leaseResult.leases,
+            tenants: tenantResult.tenants,
+            properties: propertyResult.properties,
+            units: unitResults.flat(),
+            error: '',
+          })
+        }
+      } catch (error) {
+        if (isCurrent) setData((current) => ({ ...current, loading: false, error: error.message || 'Unable to load lease information.' }))
+      }
+    }
+    fetchPageData()
+    return () => { isCurrent = false }
+  }, [retryCount])
+
+  useEffect(() => {
+    if (selectedLeaseId === null) return undefined
+    let isCurrent = true
+    async function fetchLease() {
+      setLeaseDetails({ loading: true, lease: null, error: '' })
+      try {
+        const result = await apiRequest(`/api/leases/${encodeURIComponent(selectedLeaseId)}`, { authenticated: true })
+        if (!result?.lease) throw new Error('Lease details could not be read. Please try again.')
+        if (isCurrent) setLeaseDetails({ loading: false, lease: result.lease, error: '' })
+      } catch (error) {
+        if (isCurrent) setLeaseDetails({ loading: false, lease: null, error: error.message || 'Unable to load lease details.' })
+      }
+    }
+    fetchLease()
+    return () => { isCurrent = false }
+  }, [selectedLeaseId, detailRetry])
+
+  function leaseCreated() {
+    setShowCreateForm(false)
+    setRetryCount((count) => count + 1)
+  }
+
+  async function updateLease(action, body) {
+    if (!leaseDetails.lease) return
+    setActionState({ busy: true, error: '' })
+    try {
+      await apiRequest(`/api/leases/${encodeURIComponent(leaseDetails.lease.id)}/${action}`, {
+        method: 'POST',
+        authenticated: true,
+        ...(body ? { body } : {}),
+      })
+      setIsEnding(false)
+      setRetryCount((count) => count + 1)
+      setDetailRetry((count) => count + 1)
+    } catch (error) {
+      setActionState({ busy: false, error: error.message || 'Unable to update this lease.' })
+      return
+    }
+    setActionState({ busy: false, error: '' })
+  }
+
+  const today = localDateString(new Date())
+  const tenantById = new Map(data.tenants.map((tenant) => [tenant.id, tenant]))
+  const unitById = new Map(data.units.map((unit) => [unit.id, unit]))
+  const propertyById = new Map(data.properties.map((property) => [property.id, property]))
+  const selectedLease = leaseDetails.lease
+  const selectedUnit = selectedLease ? unitById.get(selectedLease.unit_id) : null
+  const selectedProperty = selectedUnit ? propertyById.get(selectedUnit.property_id) : null
+  const activeOverlap = selectedLease && !selectedLease.is_active && data.leases.some((lease) => (
+    lease.is_active && lease.unit_id === selectedLease.unit_id && leaseOverlaps(lease, selectedLease.start_date, selectedLease.end_date)
+  ))
+  const pastScheduledEnd = Boolean(selectedLease?.end_date && selectedLease.end_date < today)
+  const cannotActivateReason = selectedLease?.is_active
+    ? ''
+    : !selectedUnit?.is_active
+      ? 'This unit is inactive and cannot be leased.'
+      : pastScheduledEnd
+        ? 'A lease with a past end date cannot be activated.'
+        : activeOverlap
+          ? 'This lease overlaps another active lease for the unit.'
+          : ''
+
+  if (selectedLeaseId !== null) {
+    return (
+      <section className="management-page" aria-labelledby="lease-detail-heading">
+        <button className="back-button" type="button" onClick={() => { setSelectedLeaseId(null); setIsEnding(false); setActionState({ busy: false, error: '' }) }}>
+          <span aria-hidden="true">←</span> All leases
+        </button>
+        {leaseDetails.loading ? (
+          <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading lease details…</div>
+        ) : leaseDetails.error ? (
+          <div className="overview-message overview-error" role="alert">
+            <div><h4>Lease details could not be loaded</h4><p>{leaseDetails.error}</p></div>
+            <button className="retry-button" type="button" onClick={() => setDetailRetry((count) => count + 1)}>Try again</button>
+          </div>
+        ) : selectedLease && (
+          <>
+            <div className="management-page-heading detail-heading">
+              <div>
+                <p className="eyebrow">Lease record</p>
+                <h2 id="lease-detail-heading">{tenantById.get(selectedLease.tenant_id)?.full_name || 'Tenant unavailable'}</h2>
+                <p>{selectedProperty?.name || 'Property unavailable'}{selectedUnit ? ` · Unit ${selectedUnit.unit_number}` : ''}</p>
+              </div>
+              <span className={`status-pill lease-status${selectedLease.is_active ? ' is-active' : ''}`}>
+                {selectedLease.is_active ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+            <dl className="lease-detail-card">
+              <div><dt>Tenant</dt><dd>{tenantById.get(selectedLease.tenant_id)?.full_name || 'Unavailable'}</dd></div>
+              <div><dt>Property and unit</dt><dd>{selectedProperty?.name || 'Unavailable'}{selectedUnit ? ` · Unit ${selectedUnit.unit_number}` : ''}</dd></div>
+              <div><dt>Start date</dt><dd>{selectedLease.start_date}</dd></div>
+              <div><dt>End date</dt><dd>{selectedLease.end_date || 'No scheduled end date'}</dd></div>
+              <div><dt>Agreed monthly rent</dt><dd>{formatKes(selectedLease.monthly_rent)}</dd></div>
+              <div><dt>Status</dt><dd>{selectedLease.is_active ? 'Active' : 'Inactive'}</dd></div>
+            </dl>
+            {actionState.error && <div className="form-error lease-action-error" role="alert">{actionState.error}</div>}
+            {selectedLease.is_active ? (
+              selectedLease.start_date <= today ? (
+                isEnding ? (
+                  <form className="management-form lease-end-form" onSubmit={(event) => {
+                    event.preventDefault()
+                    const maximumDate = selectedLease.end_date && selectedLease.end_date < today ? selectedLease.end_date : today
+                    if (!endDate || endDate < selectedLease.start_date || endDate > maximumDate) {
+                      setActionState({ busy: false, error: 'End date must be on or after the lease start and no later than today or the scheduled end date.' })
+                      return
+                    }
+                    updateLease('end', { end_date: endDate })
+                  }}>
+                    <div className="management-form-heading"><h3>End active lease</h3></div>
+                    <div className="field-group">
+                      <label htmlFor="lease-effective-end">Effective end date</label>
+                      <input id="lease-effective-end" type="date" min={selectedLease.start_date} max={selectedLease.end_date && selectedLease.end_date < today ? selectedLease.end_date : today} value={endDate} disabled={actionState.busy} required onChange={(event) => setEndDate(event.target.value)} />
+                    </div>
+                    <div className="management-form-actions">
+                      <button className="text-button" type="button" disabled={actionState.busy} onClick={() => setIsEnding(false)}>Cancel</button>
+                      <button className="primary-button compact-button" type="submit" disabled={actionState.busy}>{actionState.busy ? 'Saving…' : 'Confirm end'}</button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="lease-actions">
+                    <button className="secondary-button compact-button" type="button" disabled={actionState.busy} onClick={() => {
+                      const defaultDate = selectedLease.end_date && selectedLease.end_date < today ? selectedLease.end_date : today
+                      setEndDate(defaultDate)
+                      setActionState({ busy: false, error: '' })
+                      setIsEnding(true)
+                    }}>End lease</button>
+                  </div>
+                )
+              ) : (
+                <p className="form-guidance">This lease starts in the future and cannot be ended before its start date.</p>
+              )
+            ) : (
+              <div className="lease-actions">
+                {cannotActivateReason ? (
+                  <p className="form-guidance">{cannotActivateReason}</p>
+                ) : null}
+                <button className="primary-button compact-button" type="button" disabled={actionState.busy || Boolean(cannotActivateReason)} onClick={() => updateLease('activate')}>
+                  {actionState.busy ? 'Saving…' : 'Activate lease'}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    )
+  }
+
+  return (
+    <section className="management-page" aria-labelledby="leases-page-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Agreements</p>
+          <h2 id="leases-page-heading">Leases</h2>
+          <p>Review tenancy periods, agreed rent, and lease status.</p>
+        </div>
+        <button className="primary-button compact-button" type="button" onClick={() => setShowCreateForm(true)}>Create lease</button>
+      </div>
+      {showCreateForm && (
+        <LeaseForm
+          tenants={data.tenants}
+          properties={data.properties}
+          units={data.units}
+          leases={data.leases}
+          onCancel={() => setShowCreateForm(false)}
+          onCreated={leaseCreated}
+        />
+      )}
+      {data.loading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading leases and available units…</div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Lease information could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Try again</button>
+        </div>
+      ) : data.leases.length === 0 ? (
+        <div className="overview-empty compact-empty">
+          <h4>No leases yet</h4>
+          <p>Created leases will appear here. A new lease remains inactive until you activate it.</p>
+        </div>
+      ) : (
+        <ul className="lease-list">
+          {data.leases.map((lease) => {
+            const tenant = tenantById.get(lease.tenant_id)
+            const unit = unitById.get(lease.unit_id)
+            const property = unit ? propertyById.get(unit.property_id) : null
+            return (
+              <li key={lease.id}>
+                <button className="lease-list-card" type="button" onClick={() => setSelectedLeaseId(lease.id)}>
+                  <span className={`lease-indicator${lease.is_active ? ' is-active' : ''}`} aria-hidden="true" />
+                  <span className="lease-list-main">
+                    <strong>{tenant?.full_name || 'Tenant unavailable'}</strong>
+                    <span>{property?.name || 'Property unavailable'}{unit ? ` · Unit ${unit.unit_number}` : ''}</span>
+                  </span>
+                  <span className="lease-list-dates">{lease.start_date}{lease.end_date ? ` – ${lease.end_date}` : ' – No end date'}</span>
+                  <span className="lease-list-rent">{formatKes(lease.monthly_rent)}<small>monthly</small></span>
+                  <span className={`status-pill${lease.is_active ? ' is-active' : ''}`}>{lease.is_active ? 'Active' : 'Inactive'}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function localDateString(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -940,8 +1331,10 @@ function DashboardShell({ user }) {
             </>
           ) : page === 'Properties' ? (
             <PropertiesPage onDataChanged={() => setDataVersion((version) => version + 1)} />
-          ) : (
+          ) : page === 'Tenants' ? (
             <TenantsPage />
+          ) : (
+            <LeasesPage />
           )}
         </main>
       </div>
