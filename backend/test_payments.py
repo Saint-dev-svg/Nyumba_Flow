@@ -1,8 +1,13 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
+from decimal import Decimal
+from threading import Barrier
+from time import monotonic, sleep
 
 import pytest
 from flask_jwt_extended import create_access_token
+from sqlalchemy import text
 
 from extensions import db
 from models import (
@@ -202,6 +207,65 @@ def record_payment(client, headers, tenant_id, amount="1000.00"):
     )
 
 
+def _run_competing_allocations(app, headers, payment_allocations, lock_table, lock_id):
+    """Hold one target row until both independent request transactions are queued."""
+    barrier = Barrier(len(payment_allocations) + 1)
+    with app.app_context():
+        engine = db.engine
+    blocker = engine.connect()
+    blocker_transaction = blocker.begin()
+    futures = []
+    executor = ThreadPoolExecutor(max_workers=len(payment_allocations))
+    try:
+        blocker.execute(
+            text(f"SELECT id FROM {lock_table} WHERE id = :row_id FOR UPDATE"),
+            {"row_id": lock_id},
+        ).one()
+
+        def post_allocation(payment_id, allocations):
+            barrier.wait(timeout=10)
+            with app.test_client() as client:
+                return client.post(
+                    f"/api/payments/{payment_id}/allocations",
+                    json={"allocations": allocations},
+                    headers=headers,
+                )
+
+        for payment_id, allocations in payment_allocations:
+            futures.append(executor.submit(post_allocation, payment_id, allocations))
+        barrier.wait(timeout=10)
+
+        deadline = monotonic() + 15
+        while monotonic() < deadline:
+            with engine.connect() as monitor:
+                waiting_requests = monitor.execute(text("""
+                    SELECT count(*)
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND state = 'active'
+                      AND wait_event_type = 'Lock'
+                      AND query ILIKE '%FOR UPDATE%'
+                """)).scalar_one()
+            if waiting_requests >= len(payment_allocations):
+                break
+            if any(future.done() for future in futures):
+                raise AssertionError("A competing request finished before reaching the locked row.")
+            sleep(0.02)
+        else:
+            raise AssertionError(
+                f"Expected {len(payment_allocations)} PostgreSQL lock waits; "
+                f"observed {waiting_requests}."
+            )
+
+        blocker_transaction.commit()
+        return [future.result(timeout=15) for future in futures]
+    finally:
+        if blocker_transaction.is_active:
+            blocker_transaction.rollback()
+        blocker.close()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 def test_record_payment_creates_receipt_for_owned_tenant(app, cleanup_records):
     with app.app_context():
         landlord = create_landlord()
@@ -382,6 +446,102 @@ def test_allocations_reject_non_issued_invoice_charges(
 
     assert response.status_code == 404
     assert response.get_json()["error"] == "One or more charges were not found for this tenant."
+
+
+def test_concurrent_allocations_cannot_exceed_payment_balance(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        landlord_id, tenant_id, lease_id = landlord.id, tenant.id, lease.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease_id)
+        cleanup_records["invoices"].add(invoice["id"])
+        rent, utilities = invoice["charges"]
+        recorded = record_payment(client, headers, tenant_id, "1000.00")
+        assert recorded.status_code == 201
+        payment_id = recorded.get_json()["payment"]["id"]
+        cleanup_records["payments"].add(payment_id)
+
+    results = _run_competing_allocations(
+        app,
+        headers,
+        [
+            (payment_id, [{"charge_id": rent["id"], "amount": "700.00"}]),
+            (payment_id, [{"charge_id": utilities["id"], "amount": "700.00"}]),
+        ],
+        "payments",
+        payment_id,
+    )
+
+    assert sorted(response.status_code for response in results) == [200, 409]
+    with app.app_context():
+        allocated = sum(
+            (Decimal(row.amount) for row in PaymentAllocation.query.filter_by(
+                payment_id=payment_id
+            ).all()),
+            Decimal("0.00"),
+        )
+    assert allocated <= Decimal("1000.00")
+
+
+def test_concurrent_allocations_cannot_exceed_charge_balance(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        landlord_id, tenant_id, lease_id = landlord.id, tenant.id, lease.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease_id)
+        cleanup_records["invoices"].add(invoice["id"])
+        rent = next(charge for charge in invoice["charges"] if charge["category"] == "rent")
+
+        initial_payment = record_payment(client, headers, tenant_id, "7500.00")
+        assert initial_payment.status_code == 201
+        initial_id = initial_payment.get_json()["payment"]["id"]
+        cleanup_records["payments"].add(initial_id)
+        initial_allocation = client.post(
+            f"/api/payments/{initial_id}/allocations",
+            json={"allocations": [{"charge_id": rent["id"], "amount": "7500.00"}]},
+            headers=headers,
+        )
+        assert initial_allocation.status_code == 200
+
+        competing_payment_ids = []
+        for _ in range(2):
+            recorded = record_payment(client, headers, tenant_id, "1000.00")
+            assert recorded.status_code == 201
+            competing_payment_ids.append(recorded.get_json()["payment"]["id"])
+        cleanup_records["payments"].update(competing_payment_ids)
+
+    results = _run_competing_allocations(
+        app,
+        headers,
+        [
+            (payment_id, [{"charge_id": rent["id"], "amount": "400.00"}])
+            for payment_id in competing_payment_ids
+        ],
+        "charges",
+        rent["id"],
+    )
+
+    assert sorted(response.status_code for response in results) == [200, 409]
+    with app.app_context():
+        charge = db.session.get(Charge, rent["id"])
+        allocated = sum(
+            (Decimal(row.amount) for row in PaymentAllocation.query.filter_by(
+                charge_id=rent["id"]
+            ).all()),
+            Decimal("0.00"),
+        )
+        charge_amount = Decimal(charge.amount)
+    assert allocated <= charge_amount
 
 
 def test_landlord_cannot_record_or_allocate_for_another_landlord(app, cleanup_records):
