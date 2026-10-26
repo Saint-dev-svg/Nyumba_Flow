@@ -853,6 +853,121 @@ button.nav-item {
   color: var(--color-accent-hover);
 }
 
+.tenant-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-list-card {
+  display: flex;
+  width: 100%;
+  min-height: 82px;
+  align-items: center;
+  gap: 15px;
+  padding: 15px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  color: inherit;
+  text-align: left;
+}
+
+.tenant-list-card:hover {
+  border-color: #cbd4ca;
+  background: #fdfefc;
+}
+
+.tenant-avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #dce6dc;
+  border-radius: 50%;
+  background: #f2f6f1;
+  color: var(--color-accent-hover);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.tenant-list-details {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+}
+
+.tenant-list-details strong,
+.tenant-list-details > span {
+  overflow-wrap: anywhere;
+}
+
+.tenant-list-details strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.tenant-list-details > span,
+.tenant-list-phone {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.tenant-list-phone {
+  min-width: 130px;
+}
+
+.tenant-detail-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.tenant-detail-card > div {
+  min-width: 0;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tenant-detail-card > div:nth-child(odd) {
+  border-right: 1px solid var(--color-border);
+}
+
+.tenant-detail-card > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.tenant-detail-card dt {
+  margin-bottom: 7px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.tenant-detail-card dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.optional-label {
+  margin-left: 4px;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .property-list {
   display: grid;
   gap: 10px;
@@ -1156,6 +1271,34 @@ button.nav-item {
     align-items: flex-end;
     flex-direction: column;
     gap: 7px;
+  }
+
+  .tenant-list-card {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .tenant-avatar {
+    width: 36px;
+    height: 36px;
+  }
+
+  .tenant-list-phone {
+    display: none;
+  }
+
+  .tenant-detail-card {
+    grid-template-columns: 1fr;
+  }
+
+  .tenant-detail-card > div,
+  .tenant-detail-card > div:nth-child(odd) {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .tenant-detail-card > div:last-child {
+    border-bottom: 0;
   }
 }
 

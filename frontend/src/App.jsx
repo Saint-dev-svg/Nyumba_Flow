@@ -141,7 +141,7 @@ function LoginScreen() {
 const navigationItems = [
   { label: 'Overview', available: true },
   { label: 'Properties', available: true },
-  { label: 'Tenants', available: false },
+  { label: 'Tenants', available: true },
   { label: 'Leases', available: false },
   { label: 'Invoices', available: false },
   { label: 'Payments', available: false },
@@ -593,6 +593,246 @@ function PropertiesPage({ onDataChanged }) {
   )
 }
 
+function TenantForm({ tenant, onCancel, onSaved }) {
+  const [fullName, setFullName] = useState(tenant?.full_name || '')
+  const [email, setEmail] = useState(tenant?.email || '')
+  const [phoneNumber, setPhoneNumber] = useState(tenant?.phone_number || '')
+  const [nationalIdLast4, setNationalIdLast4] = useState(tenant?.national_id_last4 || '')
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+  const isEditing = Boolean(tenant)
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setError('')
+    const cleanName = fullName.trim()
+    const cleanEmail = email.trim().toLowerCase()
+    const cleanPhone = phoneNumber.trim()
+    const cleanLast4 = nationalIdLast4.trim()
+
+    if (!cleanName || cleanName.length > 120) {
+      setError('Full name is required and must be at most 120 characters.')
+      return
+    }
+    if (!cleanEmail || cleanEmail.length > 255 || !cleanEmail.includes('@') || /\s/.test(cleanEmail)) {
+      setError('Enter a valid email address of at most 255 characters.')
+      return
+    }
+    if (cleanPhone.length > 30) {
+      setError('Phone number must be at most 30 characters.')
+      return
+    }
+    if (cleanLast4 && !/^\d{4}$/.test(cleanLast4)) {
+      setError('National ID last four must contain exactly 4 digits.')
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      const body = {
+        full_name: cleanName,
+        email: cleanEmail,
+        phone_number: cleanPhone || null,
+        national_id_last4: cleanLast4 || null,
+      }
+      await apiRequest(isEditing ? `/api/tenants/${encodeURIComponent(tenant.id)}` : '/api/tenants', {
+        method: isEditing ? 'PATCH' : 'POST',
+        authenticated: true,
+        body,
+      })
+      onSaved()
+    } catch (requestError) {
+      setError(requestError.message || `Unable to ${isEditing ? 'update' : 'register'} tenant. Please try again.`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <form className="management-form" onSubmit={handleSubmit} noValidate aria-labelledby="tenant-form-title">
+      <div className="management-form-heading">
+        <h3 id="tenant-form-title">{isEditing ? 'Edit tenant details' : 'Register tenant'}</h3>
+        <button className="text-button" type="button" onClick={onCancel} disabled={isSaving}>Cancel</button>
+      </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="management-fields tenant-fields">
+        <div className="field-group">
+          <label htmlFor="tenant-full-name">Full name</label>
+          <input id="tenant-full-name" name="full_name" value={fullName} maxLength={120} autoComplete="name" disabled={isSaving} required onChange={(event) => setFullName(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="tenant-email">Email address</label>
+          <input id="tenant-email" name="email" type="email" inputMode="email" value={email} maxLength={255} autoComplete="email" disabled={isSaving} required onChange={(event) => setEmail(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="tenant-phone">Phone number <span className="optional-label">Optional</span></label>
+          <input id="tenant-phone" name="phone_number" type="tel" value={phoneNumber} maxLength={30} autoComplete="tel" disabled={isSaving} onChange={(event) => setPhoneNumber(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="tenant-national-id">National ID last four <span className="optional-label">Optional</span></label>
+          <input id="tenant-national-id" name="national_id_last4" type="text" inputMode="numeric" value={nationalIdLast4} maxLength={4} autoComplete="off" disabled={isSaving} onChange={(event) => setNationalIdLast4(event.target.value)} />
+        </div>
+      </div>
+      <div className="management-form-actions">
+        <button className="primary-button compact-button" type="submit" disabled={isSaving}>
+          {isSaving ? 'Saving…' : isEditing ? 'Save changes' : 'Register tenant'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function TenantsPage() {
+  const [tenants, setTenants] = useState([])
+  const [selectedTenantId, setSelectedTenantId] = useState(null)
+  const [tenantDetails, setTenantDetails] = useState({ loading: false, tenant: null, error: '' })
+  const [isLoading, setIsLoading] = useState(true)
+  const [listError, setListError] = useState('')
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [listReload, setListReload] = useState(0)
+  const [detailReload, setDetailReload] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+    async function fetchTenants() {
+      setIsLoading(true)
+      setListError('')
+      try {
+        const result = await apiRequest('/api/tenants', { authenticated: true })
+        if (!Array.isArray(result?.tenants)) throw new Error('The tenant list could not be read. Please try again.')
+        if (isCurrent) setTenants(result.tenants)
+      } catch (error) {
+        if (isCurrent) setListError(error.message || 'Unable to load tenants. Please try again.')
+      } finally {
+        if (isCurrent) setIsLoading(false)
+      }
+    }
+    fetchTenants()
+    return () => { isCurrent = false }
+  }, [listReload])
+
+  useEffect(() => {
+    if (selectedTenantId === null) return undefined
+    let isCurrent = true
+    async function fetchTenant() {
+      setTenantDetails({ loading: true, tenant: null, error: '' })
+      try {
+        const result = await apiRequest(`/api/tenants/${encodeURIComponent(selectedTenantId)}`, { authenticated: true })
+        if (!result?.tenant) throw new Error('Tenant details could not be read. Please try again.')
+        if (isCurrent) setTenantDetails({ loading: false, tenant: result.tenant, error: '' })
+      } catch (error) {
+        if (isCurrent) setTenantDetails({ loading: false, tenant: null, error: error.message || 'Unable to load tenant details.' })
+      }
+    }
+    fetchTenant()
+    return () => { isCurrent = false }
+  }, [selectedTenantId, detailReload])
+
+  function tenantSaved() {
+    setShowCreateForm(false)
+    setIsEditing(false)
+    setListReload((count) => count + 1)
+    if (selectedTenantId !== null) setDetailReload((count) => count + 1)
+  }
+
+  function closeTenantDetails() {
+    setSelectedTenantId(null)
+    setTenantDetails({ loading: false, tenant: null, error: '' })
+    setIsEditing(false)
+  }
+
+  if (selectedTenantId !== null) {
+    return (
+      <section className="management-page" aria-labelledby="tenant-detail-heading">
+        <button className="back-button" type="button" onClick={closeTenantDetails}>
+          <span aria-hidden="true">←</span> All tenants
+        </button>
+        {tenantDetails.loading ? (
+          <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading tenant details…</div>
+        ) : tenantDetails.error ? (
+          <div className="overview-message overview-error" role="alert">
+            <div><h4>Tenant details could not be loaded</h4><p>{tenantDetails.error}</p></div>
+            <button className="retry-button" type="button" onClick={() => setDetailReload((count) => count + 1)}>Try again</button>
+          </div>
+        ) : tenantDetails.tenant && (
+          <>
+            <div className="management-page-heading detail-heading">
+              <div>
+                <p className="eyebrow">Tenant record</p>
+                <h2 id="tenant-detail-heading">{tenantDetails.tenant.full_name}</h2>
+                <p>{tenantDetails.tenant.email}</p>
+              </div>
+              {!isEditing && (
+                <button className="primary-button compact-button" type="button" onClick={() => setIsEditing(true)}>Edit details</button>
+              )}
+            </div>
+            {isEditing ? (
+              <TenantForm tenant={tenantDetails.tenant} onCancel={() => setIsEditing(false)} onSaved={tenantSaved} />
+            ) : (
+              <dl className="tenant-detail-card">
+                <div><dt>Full name</dt><dd>{tenantDetails.tenant.full_name}</dd></div>
+                <div><dt>Email address</dt><dd>{tenantDetails.tenant.email}</dd></div>
+                <div><dt>Phone number</dt><dd>{tenantDetails.tenant.phone_number || 'Not provided'}</dd></div>
+                <div><dt>National ID last four</dt><dd>{tenantDetails.tenant.national_id_last4 || 'Not provided'}</dd></div>
+              </dl>
+            )}
+          </>
+        )}
+      </section>
+    )
+  }
+
+  return (
+    <section className="management-page" aria-labelledby="tenants-page-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">People</p>
+          <h2 id="tenants-page-heading">Tenants</h2>
+          <p>Keep tenant contact details available for your property records.</p>
+        </div>
+        <button className="primary-button compact-button" type="button" onClick={() => setShowCreateForm(true)}>Register tenant</button>
+      </div>
+      {showCreateForm && <TenantForm onCancel={() => setShowCreateForm(false)} onSaved={tenantSaved} />}
+      {isLoading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading tenants…</div>
+      ) : listError ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Tenants could not be loaded</h4><p>{listError}</p></div>
+          <button className="retry-button" type="button" onClick={() => setListReload((count) => count + 1)}>Try again</button>
+        </div>
+      ) : tenants.length === 0 ? (
+        <div className="overview-empty compact-empty">
+          <div className="empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 40 40" fill="none">
+              <circle cx="20" cy="13" r="6" stroke="currentColor" strokeWidth="1.7" />
+              <path d="M8 33c.8-6.1 5.4-9.5 12-9.5s11.2 3.4 12 9.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          </div>
+          <h4>No tenants yet</h4>
+          <p>Register a tenant to keep their contact details with your property records.</p>
+        </div>
+      ) : (
+        <ul className="tenant-list">
+          {tenants.map((tenant) => (
+            <li key={tenant.id}>
+              <button className="tenant-list-card" type="button" onClick={() => setSelectedTenantId(tenant.id)}>
+                <span className="tenant-avatar" aria-hidden="true">{tenant.full_name.trim().charAt(0).toUpperCase()}</span>
+                <span className="tenant-list-details">
+                  <strong>{tenant.full_name}</strong>
+                  <span>{tenant.email}</span>
+                </span>
+                <span className="tenant-list-phone">{tenant.phone_number || 'No phone number'}</span>
+                <span className="property-open-label">View details <span aria-hidden="true">→</span></span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -698,8 +938,10 @@ function DashboardShell({ user }) {
               </section>
               <PropertyOverview refreshKey={dataVersion} />
             </>
-          ) : (
+          ) : page === 'Properties' ? (
             <PropertiesPage onDataChanged={() => setDataVersion((version) => version + 1)} />
+          ) : (
+            <TenantsPage />
           )}
         </main>
       </div>
