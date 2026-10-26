@@ -135,6 +135,7 @@ def _charge_access_query(landlord_id, tenant_id, charge_ids):
             Lease.tenant_id == tenant_id,
             Property.owner_id == landlord_id,
             Tenant.owner_id == landlord_id,
+            Invoice.status == "issued",
         )
         .order_by(Charge.id)
         .with_for_update()

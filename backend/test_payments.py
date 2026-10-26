@@ -348,6 +348,42 @@ def test_allocations_cannot_exceed_charge_outstanding_balance(app, cleanup_recor
     assert over_balance.get_json()["outstanding_balance"] == "3000.00"
 
 
+@pytest.mark.parametrize("invoice_status", ["draft", "void"])
+def test_allocations_reject_non_issued_invoice_charges(
+    app, cleanup_records, invoice_status
+):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        landlord_id, tenant_id, lease_id = landlord.id, tenant.id, lease.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease_id)
+        cleanup_records["invoices"].add(invoice["id"])
+        with app.app_context():
+            db_invoice = db.session.get(Invoice, invoice["id"])
+            db_invoice.status = invoice_status
+            db.session.commit()
+
+        charge = next(item for item in invoice["charges"] if item["category"] == "rent")
+        recorded = record_payment(client, headers, tenant_id, "1000.00")
+        assert recorded.status_code == 201
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+        response = client.post(
+            f"/api/payments/{payment['id']}/allocations",
+            json={"allocations": [{"charge_id": charge["id"], "amount": "500.00"}]},
+            headers=headers,
+        )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"] == "One or more charges were not found for this tenant."
+
+
 def test_landlord_cannot_record_or_allocate_for_another_landlord(app, cleanup_records):
     with app.app_context():
         landlord_a = create_landlord()
