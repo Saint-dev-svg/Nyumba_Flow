@@ -143,7 +143,10 @@ const navigationItems = [
   { label: 'Properties', available: true },
   { label: 'Tenants', available: true },
   { label: 'Leases', available: true },
-  { label: 'Invoices', available: false },
+  { label: 'Monthly Billing', available: true },
+  { label: 'Rent Invoices', available: true },
+  { label: 'Utilities Invoices', available: true },
+  { label: 'Other Invoices', available: true },
   { label: 'Payments', available: false },
 ]
 
@@ -1224,11 +1227,740 @@ function localDateString(date) {
   return `${year}-${month}-${day}`
 }
 
+const MAX_MONEY_CENTS = 999999999999n
+
+function moneyToCents(value) {
+  const text = String(value).trim()
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null
+  const [whole, fraction = ''] = text.split('.')
+  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'))
+  return cents <= MAX_MONEY_CENTS ? cents : null
+}
+
+function centsToMoney(cents) {
+  return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`
+}
+
+function invoicePaymentProgress(invoice) {
+  const total = moneyToCents(invoice.total_amount)
+  const paid = moneyToCents(invoice.paid_amount)
+  const outstanding = moneyToCents(invoice.outstanding_balance)
+  if (total === 0n && outstanding === 0n) return 'No balance due'
+  if (outstanding === 0n) return 'Fully paid'
+  if (paid > 0n) return 'Partially paid'
+  return 'Unpaid'
+}
+
+function invoiceChargeLabel(category) {
+  return category.charAt(0).toUpperCase() + category.slice(1)
+}
+
+function InvoiceForm({ leases, tenants, properties, units, invoices, onCancel, onCreated }) {
+  const [leaseId, setLeaseId] = useState('')
+  const [purpose, setPurpose] = useState('rent')
+  const [periodStart, setPeriodStart] = useState('')
+  const [periodEnd, setPeriodEnd] = useState('')
+  const [dueDate, setDueDate] = useState('')
+  const [charges, setCharges] = useState([{ key: 1, category: 'rent', description: 'Rent', amount: '' }])
+  const [nextChargeKey, setNextChargeKey] = useState(2)
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const tenantById = new Map(tenants.map((tenant) => [tenant.id, tenant]))
+  const unitById = new Map(units.map((unit) => [unit.id, unit]))
+  const propertyById = new Map(properties.map((property) => [property.id, property]))
+  const eligibleLeases = leases.filter((lease) => lease.is_active)
+  const selectedLease = eligibleLeases.find((lease) => String(lease.id) === leaseId)
+  const duplicatePurpose = Boolean(selectedLease && periodStart && periodEnd && invoices.some((invoice) => (
+    invoice.lease_id === selectedLease.id && invoice.period_start === periodStart && invoice.period_end === periodEnd && invoice.purpose === purpose
+  )))
+
+  function updateCharge(key, updates) {
+    setCharges((current) => current.map((charge) => charge.key === key ? { ...charge, ...updates } : charge))
+  }
+
+  function addCharge() {
+    if (purpose === 'utilities') return
+    setCharges((current) => [...current, { key: nextChargeKey, category: purpose, description: '', amount: '' }])
+    setNextChargeKey((key) => key + 1)
+  }
+
+  function changePurpose(nextPurpose) {
+    setPurpose(nextPurpose)
+    setCharges([{
+      key: nextChargeKey,
+      category: nextPurpose,
+      description: '',
+      amount: '',
+      ...(nextPurpose === 'utilities' ? { water: '', garbage: '' } : {}),
+    }])
+    setNextChargeKey((key) => key + 1)
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setError('')
+    if (!selectedLease) {
+      setError('Select an active lease for this invoice.')
+      return
+    }
+    if (!periodStart || !periodEnd || !dueDate) {
+      setError('Enter the billing period start, end, and due dates.')
+      return
+    }
+    if (periodEnd < periodStart) {
+      setError('Billing period end cannot be before its start.')
+      return
+    }
+    if (duplicatePurpose) {
+      setError(`A ${purpose} invoice already exists for this lease and billing period.`)
+      return
+    }
+    if (!charges.length) {
+      setError('Add at least one invoice charge.')
+      return
+    }
+
+    const payloadCharges = []
+    for (const [index, charge] of charges.entries()) {
+      const description = charge.description.trim()
+      if (description.length > 255) {
+        setError(`Charge ${index + 1} description must be at most 255 characters.`)
+        return
+      }
+      if (charge.category === 'utilities') {
+        const waterCents = moneyToCents(charge.water || '')
+        const garbageCents = moneyToCents(charge.garbage || '')
+        if (waterCents === null || garbageCents === null) {
+          setError(`Enter valid water and garbage amounts for charge ${index + 1}, each with no more than two decimal places.`)
+          return
+        }
+        const totalCents = waterCents + garbageCents
+        if (totalCents > MAX_MONEY_CENTS) {
+          setError(`Utilities charge ${index + 1} is too large.`)
+          return
+        }
+        payloadCharges.push({
+          category: 'utilities',
+          amount: centsToMoney(totalCents),
+          description: description || null,
+          utility_breakdowns: [
+            { category: 'water', amount: centsToMoney(waterCents) },
+            { category: 'garbage', amount: centsToMoney(garbageCents) },
+          ],
+        })
+      } else {
+        const amountCents = moneyToCents(charge.amount || '')
+        if (amountCents === null) {
+          setError(`Enter a valid ${charge.category} amount for charge ${index + 1}, with no more than two decimal places.`)
+          return
+        }
+        payloadCharges.push({
+          category: charge.category,
+          amount: centsToMoney(amountCents),
+          description: description || null,
+        })
+      }
+    }
+
+    const body = {
+      lease_id: Number(leaseId),
+      period_start: periodStart,
+      period_end: periodEnd,
+      due_date: dueDate,
+      purpose,
+      charges: payloadCharges,
+    }
+    setIsSaving(true)
+    try {
+      const result = await apiRequest('/api/invoices', { method: 'POST', authenticated: true, body })
+      onCreated(result.invoice)
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to create this invoice. Please try again.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <form className="management-form invoice-form" onSubmit={handleSubmit} noValidate aria-labelledby="invoice-form-title">
+      <div className="management-form-heading">
+        <h3 id="invoice-form-title">Create draft invoice</h3>
+        <button className="text-button" type="button" onClick={onCancel} disabled={isSaving}>Cancel</button>
+      </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {eligibleLeases.length === 0 && <p className="form-guidance">Invoices can only be created for active leases. Activate an eligible lease first.</p>}
+      <div className="management-fields invoice-fields">
+        <div className="field-group">
+          <label htmlFor="invoice-purpose">Invoice purpose</label>
+          <select id="invoice-purpose" value={purpose} disabled={isSaving} onChange={(event) => changePurpose(event.target.value)}>
+            <option value="rent">Rent</option>
+            <option value="utilities">Utilities</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div className="field-group">
+          <label htmlFor="invoice-lease">Active lease</label>
+          <select id="invoice-lease" value={leaseId} disabled={isSaving || eligibleLeases.length === 0} required onChange={(event) => setLeaseId(event.target.value)}>
+            <option value="">Select an active lease</option>
+            {eligibleLeases.map((lease) => {
+              const tenant = tenantById.get(lease.tenant_id)
+              const unit = unitById.get(lease.unit_id)
+              const property = unit ? propertyById.get(unit.property_id) : null
+              return <option key={lease.id} value={lease.id}>{tenant?.full_name || 'Tenant'} · {property?.name || 'Property'} / {unit?.unit_number || 'Unit'}</option>
+            })}
+          </select>
+        </div>
+        <div className="field-group">
+          <label htmlFor="invoice-period-start">Billing period start</label>
+          <input id="invoice-period-start" type="date" value={periodStart} disabled={isSaving} required onChange={(event) => setPeriodStart(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="invoice-period-end">Billing period end</label>
+          <input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} disabled={isSaving} required onChange={(event) => setPeriodEnd(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="invoice-due-date">Due date</label>
+          <input id="invoice-due-date" type="date" value={dueDate} disabled={isSaving} required onChange={(event) => setDueDate(event.target.value)} />
+        </div>
+      </div>
+      {duplicatePurpose && <p className="form-warning" role="status">A {purpose} invoice already exists for this lease and exact billing period.</p>}
+
+      <div className="invoice-charge-heading">
+        <div><h4>Charges</h4><p>{purpose === 'utilities' ? 'Water and garbage form one combined utilities charge.' : `Add one or more ${purpose} charges.`}</p></div>
+        {purpose !== 'utilities' && <button className="secondary-button compact-button" type="button" onClick={addCharge} disabled={isSaving}>Add charge</button>}
+      </div>
+      <div className="invoice-charge-list">
+        {charges.map((charge, index) => {
+          const waterCents = charge.category === 'utilities' ? moneyToCents(charge.water || '') : null
+          const garbageCents = charge.category === 'utilities' ? moneyToCents(charge.garbage || '') : null
+          const combinedCents = waterCents !== null && garbageCents !== null ? waterCents + garbageCents : null
+          return (
+            <fieldset className="invoice-charge-row" key={charge.key}>
+              <legend>Charge {index + 1}</legend>
+              <div className={`invoice-charge-controls${charge.category === 'utilities' ? ' utilities-charge-controls' : ''}`}>
+                <div className="field-group">
+                  <label htmlFor={`charge-category-${charge.key}`}>Category</label>
+                  <select id={`charge-category-${charge.key}`} value={charge.category} disabled={isSaving} onChange={(event) => {
+                    const category = event.target.value
+                    updateCharge(charge.key, category === 'utilities'
+                      ? { category, amount: '', water: '', garbage: '' }
+                      : { category, amount: '', water: undefined, garbage: undefined })
+                  }}>
+                    <option value={purpose}>{invoiceChargeLabel(purpose)}</option>
+                  </select>
+                </div>
+                <div className="field-group charge-description-field">
+                  <label htmlFor={`charge-description-${charge.key}`}>Description <span className="optional-label">Optional</span></label>
+                  <input id={`charge-description-${charge.key}`} value={charge.description} maxLength={255} disabled={isSaving} onChange={(event) => updateCharge(charge.key, { description: event.target.value })} />
+                </div>
+                {charge.category === 'utilities' ? (
+                  <>
+                    <div className="field-group">
+                      <label htmlFor={`charge-water-${charge.key}`}>Water (KES)</label>
+                      <input id={`charge-water-${charge.key}`} type="text" inputMode="decimal" placeholder="0.00" value={charge.water} disabled={isSaving} onChange={(event) => updateCharge(charge.key, { water: event.target.value })} />
+                    </div>
+                    <div className="field-group">
+                      <label htmlFor={`charge-garbage-${charge.key}`}>Garbage (KES)</label>
+                      <input id={`charge-garbage-${charge.key}`} type="text" inputMode="decimal" placeholder="0.00" value={charge.garbage} disabled={isSaving} onChange={(event) => updateCharge(charge.key, { garbage: event.target.value })} />
+                    </div>
+                    <div className="utilities-total">
+                      <span>Combined utilities charge</span>
+                      <strong>{combinedCents === null ? 'Enter both amounts' : formatKes(centsToMoney(combinedCents))}</strong>
+                    </div>
+                  </>
+                ) : (
+                  <div className="field-group">
+                    <label htmlFor={`charge-amount-${charge.key}`}>Amount (KES)</label>
+                    <input id={`charge-amount-${charge.key}`} type="text" inputMode="decimal" placeholder="e.g. 15000.00" value={charge.amount} disabled={isSaving} onChange={(event) => updateCharge(charge.key, { amount: event.target.value })} />
+                  </div>
+                )}
+                <button className="remove-charge-button" type="button" disabled={isSaving || charges.length === 1 || purpose === 'utilities'} aria-label={`Remove charge ${index + 1}`} onClick={() => setCharges((current) => current.filter((item) => item.key !== charge.key))}>Remove</button>
+              </div>
+            </fieldset>
+          )
+        })}
+      </div>
+      <div className="management-form-actions">
+        <button className="primary-button compact-button" type="submit" disabled={isSaving || eligibleLeases.length === 0 || duplicatePurpose}>
+          {isSaving ? 'Saving…' : 'Save draft invoice'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function currentBillingMonth() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function readingToThousandths(value) {
+  const text = String(value).trim()
+  if (!/^\d+(?:\.\d{1,3})?$/.test(text)) return null
+  const [whole, fraction = ''] = text.split('.')
+  return BigInt(whole) * 1000n + BigInt(fraction.padEnd(3, '0'))
+}
+
+function MeterReadingAndBillingPanel({ properties, units, onGenerated, onReviewInvoice }) {
+  const [billingMonth, setBillingMonth] = useState(currentBillingMonth)
+  const [propertyId, setPropertyId] = useState('')
+  const [rateDraft, setRateDraft] = useState({ water_rate: '', garbage_fee: '' })
+  const [readings, setReadings] = useState({})
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [reload, setReload] = useState(0)
+  const [savingRate, setSavingRate] = useState(false)
+  const [rateError, setRateError] = useState('')
+  const [savingUnit, setSavingUnit] = useState(null)
+  const [readingErrors, setReadingErrors] = useState({})
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [generationError, setGenerationError] = useState('')
+  const [generationResult, setGenerationResult] = useState(null)
+
+  useEffect(() => {
+    if (!propertyId && properties.length) setPropertyId(String(properties[0].id))
+  }, [propertyId, properties])
+
+  useEffect(() => {
+    if (!propertyId) {
+      setReadings({})
+      setLoadError('')
+      return undefined
+    }
+    let isCurrent = true
+    async function loadUtilityData() {
+      setIsLoading(true)
+      setLoadError('')
+      try {
+        const [settingsResult, readingResult] = await Promise.all([
+          apiRequest(`/api/properties/${encodeURIComponent(propertyId)}/utility-settings`, { authenticated: true }),
+          apiRequest(`/api/properties/${encodeURIComponent(propertyId)}/water-readings?billing_month=${encodeURIComponent(billingMonth)}`, { authenticated: true }),
+        ])
+        if (!settingsResult?.settings || !Array.isArray(readingResult?.readings)) {
+          throw new Error('Utility information could not be read. Please try again.')
+        }
+        if (isCurrent) {
+          setRateDraft({ water_rate: settingsResult.settings.water_rate, garbage_fee: settingsResult.settings.garbage_fee })
+          setReadings(Object.fromEntries(readingResult.readings.map((reading) => [reading.unit_id, reading])))
+        }
+      } catch (error) {
+        if (isCurrent) setLoadError(error.message || 'Unable to load utility information.')
+      } finally {
+        if (isCurrent) setIsLoading(false)
+      }
+    }
+    loadUtilityData()
+    return () => { isCurrent = false }
+  }, [propertyId, billingMonth, reload])
+
+  const propertyUnits = units.filter((unit) => String(unit.property_id) === propertyId)
+
+  async function saveRates(event) {
+    event.preventDefault()
+    setRateError('')
+    if (moneyToCents(rateDraft.water_rate) === null || moneyToCents(rateDraft.garbage_fee) === null) {
+      setRateError('Enter non-negative water and garbage rates with no more than two decimal places.')
+      return
+    }
+    setSavingRate(true)
+    try {
+      const result = await apiRequest(`/api/properties/${encodeURIComponent(propertyId)}/utility-settings`, {
+        method: 'PATCH', authenticated: true, body: rateDraft,
+      })
+      setRateDraft({ water_rate: result.settings.water_rate, garbage_fee: result.settings.garbage_fee })
+    } catch (error) {
+      setRateError(error.message || 'Unable to save utility rates.')
+    } finally {
+      setSavingRate(false)
+    }
+  }
+
+  async function saveReading(unit) {
+    const reading = readings[unit.id] || {}
+    setReadingErrors((current) => ({ ...current, [unit.id]: '' }))
+    const previousValue = readingToThousandths(reading.previous_reading || '')
+    const currentValue = readingToThousandths(reading.current_reading || '')
+    if (previousValue === null || currentValue === null) {
+      setReadingErrors((current) => ({ ...current, [unit.id]: 'Enter both readings with up to three decimal places.' }))
+      return
+    }
+    if (currentValue < previousValue) {
+      setReadingErrors((current) => ({ ...current, [unit.id]: 'Current reading cannot be less than the previous reading.' }))
+      return
+    }
+    setSavingUnit(unit.id)
+    try {
+      const result = await apiRequest(`/api/properties/${encodeURIComponent(propertyId)}/units/${encodeURIComponent(unit.id)}/water-reading`, {
+        method: 'PUT', authenticated: true,
+        body: { billing_month: billingMonth, previous_reading: reading.previous_reading, current_reading: reading.current_reading },
+      })
+      setReadings((current) => ({ ...current, [unit.id]: result.reading }))
+    } catch (error) {
+      setReadingErrors((current) => ({ ...current, [unit.id]: error.message || 'Unable to save this reading.' }))
+    } finally {
+      setSavingUnit(null)
+    }
+  }
+
+  async function generateDrafts() {
+    setGenerationError('')
+    setGenerationResult(null)
+    setIsGenerating(true)
+    try {
+      const result = await apiRequest('/api/invoices/generate-monthly', {
+        method: 'POST', authenticated: true, body: { billing_month: billingMonth },
+      })
+      setGenerationResult(result)
+      onGenerated()
+    } catch (error) {
+      setGenerationError(error.message || 'Unable to generate monthly drafts.')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  return (
+    <section className="utility-billing-panel" aria-labelledby="utility-billing-heading">
+      <div className="utility-billing-heading">
+        <div><p className="eyebrow">Monthly billing</p><h3 id="utility-billing-heading">Meter readings and draft generation</h3><p>Save unit readings, then prepare rent and utility drafts for a calendar month.</p></div>
+        <div className="field-group billing-month-field"><label htmlFor="billing-month">Billing month</label><input id="billing-month" type="month" value={billingMonth} disabled={isGenerating} onChange={(event) => { setBillingMonth(event.target.value); setGenerationResult(null) }} /></div>
+      </div>
+
+      <form className="utility-rates-form" onSubmit={saveRates}>
+        <div className="utility-property-field field-group">
+          <label htmlFor="utility-property">Property rates</label>
+          <select id="utility-property" value={propertyId} disabled={isLoading || properties.length === 0} onChange={(event) => setPropertyId(event.target.value)}>
+            {properties.length === 0 ? <option value="">No properties available</option> : properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}
+          </select>
+        </div>
+        <div className="field-group"><label htmlFor="water-rate">Water per unit (KES)</label><input id="water-rate" type="text" inputMode="decimal" value={rateDraft.water_rate} disabled={isLoading || savingRate || !propertyId} onChange={(event) => setRateDraft((current) => ({ ...current, water_rate: event.target.value }))} /></div>
+        <div className="field-group"><label htmlFor="garbage-fee">Garbage per unit/month (KES)</label><input id="garbage-fee" type="text" inputMode="decimal" value={rateDraft.garbage_fee} disabled={isLoading || savingRate || !propertyId} onChange={(event) => setRateDraft((current) => ({ ...current, garbage_fee: event.target.value }))} /></div>
+        <button className="secondary-button compact-button" type="submit" disabled={isLoading || savingRate || !propertyId}>{savingRate ? 'Saving…' : 'Save rates'}</button>
+      </form>
+      {rateError && <div className="form-error utility-inline-error" role="alert">{rateError}</div>}
+
+      {isLoading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading meter readings…</div>
+      ) : loadError ? (
+        <div className="overview-message overview-error" role="alert"><div><h4>Utility information could not be loaded</h4><p>{loadError}</p></div><button className="retry-button" type="button" onClick={() => setReload((count) => count + 1)}>Try again</button></div>
+      ) : properties.length === 0 ? (
+        <p className="form-guidance">Add a property and units before entering meter readings. Only active units with active leases are billed.</p>
+      ) : propertyUnits.length === 0 ? (
+        <div className="overview-empty compact-empty"><h4>No units in this property</h4><p>Add a unit before recording meter readings. Only active units with active leases are billed.</p></div>
+      ) : (
+        <div className="meter-reading-table-wrap">
+          <div className="meter-reading-table-heading"><div><h4>Water meter readings</h4><p>For {billingMonth}; saved entries can be corrected until an invoice exists for that period.</p></div><span>Readings may include three decimal places.</span></div>
+          <div className="meter-reading-list">
+            {propertyUnits.map((unit) => {
+              const reading = readings[unit.id] || { previous_reading: '', current_reading: '' }
+              return <div className="meter-reading-row" key={unit.id}>
+                <strong>Unit {unit.unit_number}<small className="meter-unit-status">{unit.is_active ? 'Active unit' : 'Inactive unit'}</small></strong>
+                <div className="field-group"><label htmlFor={`previous-reading-${unit.id}`}>Previous reading</label><input id={`previous-reading-${unit.id}`} type="text" inputMode="decimal" placeholder="0.000" value={reading.previous_reading} disabled={savingUnit === unit.id} onChange={(event) => setReadings((current) => ({ ...current, [unit.id]: { ...reading, previous_reading: event.target.value } }))} /></div>
+                <div className="field-group"><label htmlFor={`current-reading-${unit.id}`}>Current reading</label><input id={`current-reading-${unit.id}`} type="text" inputMode="decimal" placeholder="0.000" value={reading.current_reading} disabled={savingUnit === unit.id} onChange={(event) => setReadings((current) => ({ ...current, [unit.id]: { ...reading, current_reading: event.target.value } }))} /></div>
+                <button className="secondary-button compact-button" type="button" disabled={savingUnit === unit.id} onClick={() => saveReading(unit)}>{savingUnit === unit.id ? 'Saving…' : reading.id ? 'Update reading' : 'Save reading'}</button>
+                {readingErrors[unit.id] && <div className="form-error meter-reading-error" role="alert">{readingErrors[unit.id]}</div>}
+              </div>
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="monthly-generation-actions">
+        <div><strong>Generate monthly drafts</strong><span>Uses active leases and units, current lease rent, saved readings, and property rates.</span></div>
+        <button className="primary-button compact-button" type="button" disabled={isGenerating || !billingMonth} onClick={generateDrafts}>{isGenerating ? 'Generating drafts…' : 'Generate draft invoices'}</button>
+      </div>
+      {generationError && <div className="form-error utility-inline-error" role="alert">{generationError}<button className="text-button" type="button" disabled={isGenerating} onClick={generateDrafts}>Retry</button></div>}
+      {generationResult && (
+        <div className="generation-summary" role="status" aria-live="polite">
+          <div><h4>Draft generation complete for {generationResult.billing_month}</h4><p>{generationResult.created_count} created · {generationResult.already_existing_count} already existed · {generationResult.needs_reading_count} need meter attention.</p></div>
+          {generationResult.created_invoices.length > 0 && <div className="generation-summary-group"><strong>Created drafts</strong><ul>{generationResult.created_invoices.map((invoice) => <li key={invoice.id}><button className="text-button" type="button" onClick={() => onReviewInvoice(invoice.id, invoice.purpose)}>Review {invoice.purpose} draft · {formatKes(invoice.total_amount)}</button></li>)}</ul></div>}
+          {generationResult.already_existing.length > 0 && <div className="generation-summary-group"><strong>Already existing</strong><ul>{generationResult.already_existing.map((invoice) => <li key={invoice.id}><button className="text-button" type="button" onClick={() => onReviewInvoice(invoice.id, invoice.purpose)}>Review {invoice.purpose} invoice</button></li>)}</ul></div>}
+          {generationResult.needs_readings.length > 0 && <div className="generation-summary-group generation-needs-readings"><strong>Readings needed</strong><ul>{generationResult.needs_readings.map((item) => <li key={`${item.unit_id}-${item.reason}`}>{item.property_name} · Unit {item.unit_number}: {item.reason === 'missing' ? 'enter readings for this month' : item.reason === 'invalid' ? 'correct the saved meter readings' : 'calculated utility amount exceeds the invoice limit'}</li>)}</ul></div>}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function useInvoiceWorkspaceData() {
+  const [data, setData] = useState({ loading: true, invoices: [], leases: [], tenants: [], properties: [], units: [], error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+    async function fetchPageData() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const [invoiceResult, leaseResult, tenantResult, propertyResult] = await Promise.all([
+          apiRequest('/api/invoices', { authenticated: true }),
+          apiRequest('/api/leases', { authenticated: true }),
+          apiRequest('/api/tenants', { authenticated: true }),
+          apiRequest('/api/properties', { authenticated: true }),
+        ])
+        if (!Array.isArray(invoiceResult?.invoices) || !Array.isArray(leaseResult?.leases) || !Array.isArray(tenantResult?.tenants) || !Array.isArray(propertyResult?.properties)) {
+          throw new Error('Invoice information could not be read. Please try again.')
+        }
+        const unitResults = await Promise.all(propertyResult.properties.map(async (property) => {
+          const result = await apiRequest(`/api/properties/${encodeURIComponent(property.id)}/units`, { authenticated: true })
+          if (!Array.isArray(result?.units)) throw new Error('Unit information could not be read. Please try again.')
+          return result.units
+        }))
+        if (isCurrent) {
+          setData({
+            loading: false,
+            invoices: invoiceResult.invoices,
+            leases: leaseResult.leases,
+            tenants: tenantResult.tenants,
+            properties: propertyResult.properties,
+            units: unitResults.flat(),
+            error: '',
+          })
+        }
+      } catch (error) {
+        if (isCurrent) setData((current) => ({ ...current, loading: false, error: error.message || 'Unable to load invoice information.' }))
+      }
+    }
+    fetchPageData()
+    return () => { isCurrent = false }
+  }, [retryCount])
+
+  return { data, retry: () => setRetryCount((count) => count + 1) }
+}
+
+function MonthlyBillingPage({ onOpenInvoice }) {
+  const { data, retry } = useInvoiceWorkspaceData()
+  const [showCreateForm, setShowCreateForm] = useState(false)
+
+  function invoiceCreated(invoice) {
+    setShowCreateForm(false)
+    retry()
+    onOpenInvoice(invoice.id, invoice.purpose)
+  }
+
+  return (
+    <section className="management-page" aria-labelledby="monthly-billing-page-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Billing operations</p>
+          <h2 id="monthly-billing-page-heading">Monthly Billing</h2>
+          <p>Set property utility rates, manage meter readings, and prepare monthly drafts.</p>
+        </div>
+        <button className="secondary-button compact-button" type="button" onClick={() => setShowCreateForm((visible) => !visible)}>
+          {showCreateForm ? 'Close manual invoice' : 'Create manual invoice'}
+        </button>
+      </div>
+
+      {data.loading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading billing information…</div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Billing information could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={retry}>Try again</button>
+        </div>
+      ) : (
+        <>
+          <MeterReadingAndBillingPanel
+            properties={data.properties}
+            units={data.units}
+            onGenerated={retry}
+            onReviewInvoice={onOpenInvoice}
+          />
+          {showCreateForm && (
+            <InvoiceForm
+              leases={data.leases}
+              tenants={data.tenants}
+              properties={data.properties}
+              units={data.units}
+              invoices={data.invoices}
+              onCancel={() => setShowCreateForm(false)}
+              onCreated={invoiceCreated}
+            />
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
+  const { data, retry } = useInvoiceWorkspaceData()
+  const [invoiceDetails, setInvoiceDetails] = useState({ loading: false, invoice: null, error: '' })
+  const [detailRetry, setDetailRetry] = useState(0)
+  const [issueState, setIssueState] = useState({ busy: false, error: '' })
+
+  useEffect(() => {
+    if (selectedInvoiceId === null) return undefined
+    let isCurrent = true
+    async function fetchInvoice() {
+      setInvoiceDetails({ loading: true, invoice: null, error: '' })
+      try {
+        const result = await apiRequest(`/api/invoices/${encodeURIComponent(selectedInvoiceId)}`, { authenticated: true })
+        if (!result?.invoice) throw new Error('Invoice details could not be read. Please try again.')
+        if (isCurrent) setInvoiceDetails({ loading: false, invoice: result.invoice, error: '' })
+      } catch (error) {
+        if (isCurrent) setInvoiceDetails({ loading: false, invoice: null, error: error.message || 'Unable to load invoice details.' })
+      }
+    }
+    fetchInvoice()
+    return () => { isCurrent = false }
+  }, [selectedInvoiceId, detailRetry])
+
+  async function issueInvoice() {
+    if (!invoiceDetails.invoice || invoiceDetails.invoice.status !== 'draft') return
+    setIssueState({ busy: true, error: '' })
+    try {
+      const result = await apiRequest(`/api/invoices/${encodeURIComponent(invoiceDetails.invoice.id)}/issue`, {
+        method: 'POST',
+        authenticated: true,
+      })
+      if (result?.invoice) setInvoiceDetails({ loading: false, invoice: result.invoice, error: '' })
+      retry()
+      setIssueState({ busy: false, error: '' })
+    } catch (error) {
+      setIssueState({ busy: false, error: error.message || 'Unable to issue this invoice.' })
+    }
+  }
+
+  const leaseById = new Map(data.leases.map((lease) => [lease.id, lease]))
+  const tenantById = new Map(data.tenants.map((tenant) => [tenant.id, tenant]))
+  const unitById = new Map(data.units.map((unit) => [unit.id, unit]))
+  const propertyById = new Map(data.properties.map((property) => [property.id, property]))
+  const selectedInvoice = invoiceDetails.invoice
+  const selectedLease = selectedInvoice ? leaseById.get(selectedInvoice.lease_id) : null
+  const selectedTenant = selectedLease ? tenantById.get(selectedLease.tenant_id) : null
+  const selectedUnit = selectedLease ? unitById.get(selectedLease.unit_id) : null
+  const selectedProperty = selectedUnit ? propertyById.get(selectedUnit.property_id) : null
+
+  if (selectedInvoiceId !== null) {
+    return (
+      <section className="management-page" aria-labelledby="invoice-detail-heading">
+        <button className="back-button" type="button" onClick={() => { setSelectedInvoiceId(null); setIssueState({ busy: false, error: '' }) }}>
+          <span aria-hidden="true">←</span> {invoiceChargeLabel(purpose)} invoices
+        </button>
+        {invoiceDetails.loading ? (
+          <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading invoice details…</div>
+        ) : invoiceDetails.error ? (
+          <div className="overview-message overview-error" role="alert">
+            <div><h4>Invoice details could not be loaded</h4><p>{invoiceDetails.error}</p></div>
+            <button className="retry-button" type="button" onClick={() => setDetailRetry((count) => count + 1)}>Try again</button>
+          </div>
+        ) : selectedInvoice && (
+          <>
+            <div className="management-page-heading detail-heading invoice-detail-heading">
+              <div>
+                <p className="eyebrow">{invoiceChargeLabel(selectedInvoice.purpose)} invoice · {selectedInvoice.period_start} to {selectedInvoice.period_end}</p>
+                <h2 id="invoice-detail-heading">{selectedTenant?.full_name || 'Tenant unavailable'}</h2>
+                <p>{selectedProperty?.name || 'Property unavailable'}{selectedUnit ? ` · Unit ${selectedUnit.unit_number}` : ''}</p>
+              </div>
+              <span className={`status-pill invoice-lifecycle status-${selectedInvoice.status}`}>{invoiceChargeLabel(selectedInvoice.status)}</span>
+            </div>
+            <div className="invoice-meta-grid">
+              <div><span>Billing period</span><strong>{selectedInvoice.period_start} – {selectedInvoice.period_end}</strong></div>
+              <div><span>Purpose</span><strong>{invoiceChargeLabel(selectedInvoice.purpose)}</strong></div>
+              <div><span>Due date</span><strong>{selectedInvoice.due_date}</strong></div>
+              <div><span>Tenant</span><strong>{selectedTenant?.full_name || 'Unavailable'}</strong></div>
+              <div><span>Property / unit</span><strong>{selectedProperty?.name || 'Unavailable'}{selectedUnit ? ` · ${selectedUnit.unit_number}` : ''}</strong></div>
+            </div>
+            <section className="invoice-charges-detail" aria-labelledby="invoice-charges-heading">
+              <div className="property-section-heading"><h3 id="invoice-charges-heading">Charges</h3></div>
+              <ul className="invoice-detail-charge-list">
+                {selectedInvoice.charges.map((charge) => (
+                  <li className="invoice-detail-charge" key={charge.id}>
+                    <div className="invoice-detail-charge-heading">
+                      <div><strong>{invoiceChargeLabel(charge.category)}</strong>{charge.description && <span>{charge.description}</span>}</div>
+                      <strong>{formatKes(charge.amount)}</strong>
+                    </div>
+                    {charge.utility_breakdowns.length > 0 && (
+                      <div className="utility-breakdown-list">
+                        {charge.utility_breakdowns.map((breakdown) => (
+                          <div key={breakdown.category}><span>{invoiceChargeLabel(breakdown.category)}</span><span>{formatKes(breakdown.amount)}</span></div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="charge-financials">
+                      <span>Paid {formatKes(charge.paid_amount)}</span>
+                      <span>Outstanding {formatKes(charge.outstanding_balance)}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section className="invoice-balance-card" aria-label="Invoice totals and payment progress">
+              <div><span>Invoice total</span><strong>{formatKes(selectedInvoice.total_amount)}</strong></div>
+              <div><span>Paid</span><strong>{formatKes(selectedInvoice.paid_amount)}</strong></div>
+              <div><span>Outstanding</span><strong>{formatKes(selectedInvoice.outstanding_balance)}</strong></div>
+              <div className="invoice-payment-progress"><span>Payment progress</span><strong>{invoicePaymentProgress(selectedInvoice)}</strong></div>
+            </section>
+            {issueState.error && <div className="form-error lease-action-error" role="alert">{issueState.error}</div>}
+            {selectedInvoice.status === 'draft' && (
+              <div className="lease-actions">
+                <button className="primary-button compact-button" type="button" disabled={issueState.busy} onClick={issueInvoice}>
+                  {issueState.busy ? 'Issuing…' : 'Issue invoice'}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    )
+  }
+
+  return (
+    <section className="management-page" aria-labelledby="invoices-page-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">{purpose === 'rent' ? 'Rent billing' : 'Utility billing'}</p>
+          <h2 id="invoices-page-heading">{invoiceChargeLabel(purpose)} Invoices</h2>
+          <p>{purpose === 'rent' ? 'Review rent charges, invoice lifecycle, and payment balances.' : purpose === 'utilities' ? 'Review combined water and garbage charges, breakdowns, and payment balances.' : 'Review other invoice charges, lifecycle, and payment balances.'}</p>
+        </div>
+      </div>
+      {data.loading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading invoices and lease information…</div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Invoice information could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={retry}>Try again</button>
+        </div>
+      ) : data.invoices.filter((invoice) => invoice.purpose === purpose).length === 0 ? (
+        <div className="overview-empty compact-empty">
+          <h4>No {invoiceChargeLabel(purpose)} invoices yet</h4>
+          <p>{purpose === 'rent' ? 'Rent invoices created through Monthly Billing or manual invoice creation will appear here.' : purpose === 'utilities' ? 'Utilities invoices created through Monthly Billing or manual invoice creation will appear here.' : 'Other invoices created through manual invoice creation will appear here.'}</p>
+        </div>
+      ) : (
+        <ul className="invoice-list">
+          {data.invoices.filter((invoice) => invoice.purpose === purpose).map((invoice) => {
+            const lease = leaseById.get(invoice.lease_id)
+            const tenant = lease ? tenantById.get(lease.tenant_id) : null
+            const unit = lease ? unitById.get(lease.unit_id) : null
+            const property = unit ? propertyById.get(unit.property_id) : null
+            return (
+              <li key={invoice.id}>
+                <button className="invoice-list-card" type="button" onClick={() => setSelectedInvoiceId(invoice.id)}>
+                  <span className="invoice-list-main">
+                    <strong>{tenant?.full_name || 'Tenant unavailable'}</strong>
+                    <span>{property?.name || 'Property unavailable'}{unit ? ` · Unit ${unit.unit_number}` : ''}</span>
+                    <small>{invoice.period_start} – {invoice.period_end} · Due {invoice.due_date}</small>
+                  </span>
+                  <span className="invoice-list-total"><strong>{formatKes(invoice.total_amount)}</strong><small>{invoiceChargeLabel(invoice.purpose)} · {invoiceChargeLabel(invoice.status)}</small></span>
+                  <span className="invoice-list-balance"><span>Paid {formatKes(invoice.paid_amount)}</span><span>Outstanding {formatKes(invoice.outstanding_balance)}</span><small>{invoicePaymentProgress(invoice)}</small></span>
+                  <span className={`status-pill invoice-lifecycle status-${invoice.status}`}>{invoiceChargeLabel(invoice.status)}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const [page, setPage] = useState('Overview')
   const [dataVersion, setDataVersion] = useState(0)
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState(null)
   const menuButtonRef = useRef(null)
   const activeNavRef = useRef(null)
 
@@ -1248,10 +1980,17 @@ function DashboardShell({ user }) {
 
   function navigateTo(label) {
     setPage(label)
+    setSelectedInvoiceId(null)
     setMenuOpen(false)
     if (window.matchMedia('(max-width: 760px)').matches) {
       menuButtonRef.current?.focus()
     }
+  }
+
+  function openInvoice(invoiceId, purpose) {
+    setPage(purpose === 'utilities' ? 'Utilities Invoices' : purpose === 'other' ? 'Other Invoices' : 'Rent Invoices')
+    setSelectedInvoiceId(invoiceId)
+    setMenuOpen(false)
   }
 
   return (
@@ -1333,6 +2072,16 @@ function DashboardShell({ user }) {
             <PropertiesPage onDataChanged={() => setDataVersion((version) => version + 1)} />
           ) : page === 'Tenants' ? (
             <TenantsPage />
+          ) : page === 'Leases' ? (
+            <LeasesPage />
+          ) : page === 'Monthly Billing' ? (
+            <MonthlyBillingPage onOpenInvoice={openInvoice} />
+          ) : page === 'Rent Invoices' ? (
+            <InvoicesPage purpose="rent" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
+          ) : page === 'Utilities Invoices' ? (
+            <InvoicesPage purpose="utilities" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
+          ) : page === 'Other Invoices' ? (
+            <InvoicesPage purpose="other" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
           ) : (
             <LeasesPage />
           )}

@@ -1148,6 +1148,530 @@ button.nav-item {
   gap: 18px;
 }
 
+.invoice-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.utility-billing-panel {
+  display: grid;
+  gap: 21px;
+  margin: 24px 0;
+  padding: 21px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.utility-billing-heading,
+.meter-reading-table-heading,
+.monthly-generation-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.utility-billing-heading h3,
+.meter-reading-table-heading h4,
+.generation-summary h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.utility-billing-heading p:not(.eyebrow),
+.meter-reading-table-heading p,
+.monthly-generation-actions span,
+.generation-summary p {
+  margin: 6px 0 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.billing-month-field {
+  width: min(100%, 190px);
+  margin: 0;
+}
+
+.utility-rates-form {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) repeat(2, minmax(150px, 1fr)) auto;
+  align-items: end;
+  gap: 12px 14px;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #fbfcf9;
+}
+
+.utility-rates-form .field-group {
+  min-width: 0;
+  margin: 0;
+}
+
+.utility-rates-form .compact-button {
+  min-height: 40px;
+}
+
+.utility-inline-error {
+  margin-top: -12px;
+}
+
+.meter-reading-table-wrap {
+  display: grid;
+  gap: 13px;
+}
+
+.meter-reading-table-heading {
+  align-items: center;
+}
+
+.meter-reading-table-heading h4 {
+  font-size: 13px;
+}
+
+.meter-reading-table-heading > span {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.meter-reading-list {
+  display: grid;
+  gap: 9px;
+}
+
+.meter-reading-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) repeat(2, minmax(155px, 1fr)) auto;
+  align-items: end;
+  gap: 12px 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.meter-reading-row > strong {
+  align-self: center;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.meter-unit-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.meter-reading-row .field-group {
+  min-width: 0;
+  margin: 0;
+}
+
+.meter-reading-row .compact-button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.meter-reading-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.monthly-generation-actions {
+  align-items: center;
+  padding-top: 17px;
+  border-top: 1px solid var(--color-border);
+}
+
+.monthly-generation-actions > div {
+  display: grid;
+  gap: 4px;
+}
+
+.monthly-generation-actions strong,
+.generation-summary-group > strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.monthly-generation-actions span {
+  margin: 0;
+}
+
+.generation-summary {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbe5d9;
+  border-radius: var(--radius-control);
+  background: #f5f8f3;
+}
+
+.generation-summary-group ul {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.generation-summary-group .text-button {
+  min-height: 24px;
+  padding: 0;
+  text-align: left;
+}
+
+.generation-needs-readings {
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.invoice-charge-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px 0 13px;
+}
+
+.invoice-charge-heading h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.invoice-charge-heading p {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.invoice-charge-list {
+  display: grid;
+  gap: 13px;
+}
+
+.invoice-charge-row {
+  min-width: 0;
+  margin: 0;
+  padding: 14px 15px 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.invoice-charge-row legend {
+  padding: 0 5px;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.invoice-charge-controls {
+  display: grid;
+  grid-template-columns: minmax(135px, 0.9fr) minmax(220px, 1.6fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 12px 14px;
+}
+
+.utilities-charge-controls {
+  grid-template-columns: minmax(125px, 0.8fr) minmax(180px, 1.3fr) repeat(2, minmax(135px, 0.85fr)) minmax(175px, 1fr) auto;
+}
+
+.invoice-charge-controls .field-group {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.utilities-total {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  min-height: 44px;
+  gap: 5px;
+  padding: 0 10px;
+  border-left: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.utilities-total strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.remove-charge-button {
+  min-height: 40px;
+  margin-bottom: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 10px;
+  text-decoration: underline;
+}
+
+.remove-charge-button:disabled {
+  opacity: 0.45;
+}
+
+@media (max-width: 1120px) {
+  .invoice-charge-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .utilities-charge-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .charge-description-field {
+    grid-column: span 2;
+  }
+
+  .utilities-total {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+    padding: 8px 0 0;
+  }
+}
+
+.invoice-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.invoice-list-card {
+  display: flex;
+  width: 100%;
+  min-height: 93px;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  color: inherit;
+  text-align: left;
+}
+
+.invoice-list-card:hover {
+  border-color: #cbd4ca;
+  background: #fdfefc;
+}
+
+.invoice-list-main {
+  display: grid;
+  min-width: 140px;
+  flex: 1;
+  gap: 4px;
+}
+
+.invoice-list-main strong {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.invoice-list-main > span,
+.invoice-list-main small,
+.invoice-list-total small,
+.invoice-list-balance small {
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.invoice-list-total,
+.invoice-list-balance {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.invoice-list-total {
+  min-width: 100px;
+}
+
+.invoice-list-total strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.invoice-list-balance {
+  min-width: 155px;
+  color: var(--color-muted);
+}
+
+.invoice-lifecycle {
+  flex: 0 0 auto;
+  text-transform: capitalize;
+}
+
+.invoice-lifecycle.status-draft {
+  border-color: #e5dfcf;
+  background: #faf8f2;
+  color: #756a4c;
+}
+
+.invoice-lifecycle.status-issued {
+  border-color: #d8e4d8;
+  background: #f1f6f0;
+  color: var(--color-accent-hover);
+}
+
+.invoice-lifecycle.status-void {
+  background: #f3f4f1;
+  color: #727a73;
+}
+
+.invoice-detail-heading {
+  margin-bottom: 23px;
+}
+
+.invoice-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 29px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.invoice-meta-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.invoice-meta-grid > div:nth-child(odd) {
+  border-right: 1px solid var(--color-border);
+}
+
+.invoice-meta-grid > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.invoice-meta-grid span,
+.invoice-balance-card > div > span {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.invoice-meta-grid strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.invoice-charges-detail {
+  margin-bottom: 20px;
+}
+
+.invoice-detail-charge-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.invoice-detail-charge {
+  padding: 15px 17px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+}
+
+.invoice-detail-charge-heading,
+.invoice-detail-charge-heading > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.invoice-detail-charge-heading > div {
+  justify-content: flex-start;
+}
+
+.invoice-detail-charge-heading strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.invoice-detail-charge-heading span {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.utility-breakdown-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+  padding: 11px 12px;
+  border-radius: 5px;
+  background: #f7f8f4;
+}
+
+.utility-breakdown-list > div,
+.charge-financials {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.charge-financials {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.invoice-balance-card {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.invoice-balance-card > div {
+  display: grid;
+  gap: 8px;
+  padding: 17px 16px;
+  border-right: 1px solid var(--color-border);
+}
+
+.invoice-balance-card > div:last-child {
+  border-right: 0;
+}
+
+.invoice-balance-card strong {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.invoice-payment-progress strong {
+  color: var(--color-accent-hover);
+}
+
 .property-list {
   display: grid;
   gap: 10px;
@@ -1527,6 +2051,78 @@ button.nav-item {
   .lease-actions .compact-button {
     align-self: flex-start;
   }
+
+  .invoice-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-charge-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .charge-description-field {
+    grid-column: span 2;
+  }
+
+  .utilities-total {
+    grid-column: span 2;
+  }
+
+  .remove-charge-button {
+    justify-self: start;
+  }
+
+  .invoice-charge-heading {
+    align-items: flex-start;
+  }
+
+  .invoice-list-card {
+    flex-wrap: wrap;
+    gap: 11px 13px;
+    padding: 14px;
+  }
+
+  .invoice-list-main {
+    min-width: calc(100% - 34px);
+  }
+
+  .invoice-list-total,
+  .invoice-list-balance {
+    min-width: 0;
+    flex: 1;
+    padding-left: 20px;
+  }
+
+  .invoice-list-card > .invoice-lifecycle {
+    margin-left: auto;
+  }
+
+  .invoice-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-meta-grid > div,
+  .invoice-meta-grid > div:nth-child(odd) {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .invoice-meta-grid > div:last-child {
+    border-bottom: 0;
+  }
+
+  .invoice-balance-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .invoice-balance-card > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .invoice-balance-card > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--color-border);
+  }
 }
 
 @media (max-width: 420px) {
@@ -1596,5 +2192,70 @@ button.nav-item {
   .overview-content {
     padding-right: 16px;
     padding-left: 16px;
+  }
+}
+
+@media (max-width: 900px) {
+  .utility-rates-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .utility-property-field {
+    grid-column: span 2;
+  }
+
+  .meter-reading-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .meter-reading-row > strong {
+    grid-column: span 2;
+  }
+
+  .meter-reading-error {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 620px) {
+  .utility-billing-panel {
+    gap: 17px;
+    padding: 15px;
+  }
+
+  .utility-billing-heading,
+  .meter-reading-table-heading,
+  .monthly-generation-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .billing-month-field {
+    width: 100%;
+  }
+
+  .utility-rates-form,
+  .meter-reading-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .utility-property-field,
+  .meter-reading-row > strong,
+  .meter-reading-error {
+    grid-column: auto;
+  }
+
+  .utility-rates-form .compact-button,
+  .meter-reading-row .compact-button,
+  .monthly-generation-actions .compact-button {
+    justify-self: start;
+  }
+
+  .meter-reading-row > strong {
+    padding-bottom: 2px;
+  }
+
+  .monthly-generation-actions {
+    align-items: flex-start;
   }
 }

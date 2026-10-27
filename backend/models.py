@@ -49,6 +49,10 @@ class Property(db.Model):
     
     owner = db.relationship("User", back_populates = "properties")
     units = db.relationship("Unit", back_populates = "property", cascade = "all, delete-orphan",)
+    utility_settings = db.relationship(
+        "PropertyUtilitySettings", back_populates="property", uselist=False,
+        cascade="all, delete-orphan",
+    )
     
     __table_args__ = (
             UniqueConstraint(
@@ -70,6 +74,9 @@ class Unit(db.Model):
     
     property = db.relationship("Property", back_populates = "units")
     leases = db.relationship("Lease", back_populates = "unit")
+    water_meter_readings = db.relationship(
+        "WaterMeterReading", back_populates="unit"
+    )
     
     __table_args__ = (
                 UniqueConstraint(
@@ -85,6 +92,75 @@ class Unit(db.Model):
                     name = "ck_unit_monthly_rent_non_negative"
                 ),
             )
+
+
+class PropertyUtilitySettings(db.Model):
+    """Property-specific monthly water and garbage pricing."""
+
+    __tablename__ = "property_utility_settings"
+
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    water_rate = db.Column(db.Numeric(12, 2), nullable=False, default=180)
+    garbage_fee = db.Column(db.Numeric(12, 2), nullable=False, default=300)
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    property = db.relationship("Property", back_populates="utility_settings")
+
+    __table_args__ = (
+        CheckConstraint("water_rate >= 0", name="ck_utility_settings_water_rate_nonnegative"),
+        CheckConstraint("garbage_fee >= 0", name="ck_utility_settings_garbage_fee_nonnegative"),
+    )
+
+
+class WaterMeterReading(db.Model):
+    """A unit's previous and current meter readings for one calendar month."""
+
+    __tablename__ = "water_meter_readings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("units.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    previous_reading = db.Column(db.Numeric(14, 3), nullable=False)
+    current_reading = db.Column(db.Numeric(14, 3), nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    unit = db.relationship("Unit", back_populates="water_meter_readings")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "unit_id", "period_start", "period_end",
+            name="uq_water_reading_unit_period",
+        ),
+        CheckConstraint("period_end >= period_start", name="ck_water_reading_period_dates"),
+        CheckConstraint("previous_reading >= 0", name="ck_water_reading_previous_nonnegative"),
+        CheckConstraint("current_reading >= 0", name="ck_water_reading_current_nonnegative"),
+        CheckConstraint("current_reading >= previous_reading", name="ck_water_reading_not_decreasing"),
+    )
 
 
 class Tenant(db.Model):
@@ -158,6 +234,7 @@ class Invoice(db.Model):
     period_start = db.Column(db.Date, nullable=False)
     period_end = db.Column(db.Date, nullable=False)
     due_date = db.Column(db.Date, nullable=False)
+    purpose = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), nullable=False, default="draft")
     issued_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(
@@ -174,7 +251,12 @@ class Invoice(db.Model):
             "lease_id",
             "period_start",
             "period_end",
-            name="uq_invoice_lease_period",
+            "purpose",
+            name="uq_invoice_lease_period_purpose",
+        ),
+        CheckConstraint(
+            "purpose IN ('rent', 'utilities', 'other')",
+            name="ck_invoice_purpose",
         ),
         CheckConstraint(
             "period_end >= period_start",

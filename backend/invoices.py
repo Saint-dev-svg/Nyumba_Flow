@@ -91,6 +91,7 @@ def _invoice_to_dict(invoice):
         "period_start": invoice.period_start.isoformat(),
         "period_end": invoice.period_end.isoformat(),
         "due_date": invoice.due_date.isoformat(),
+        "purpose": invoice.purpose,
         "status": invoice.status,
         "issued_at": invoice.issued_at.isoformat() if invoice.issued_at else None,
         "total_amount": str(total_amount),
@@ -218,23 +219,34 @@ def create_invoice():
     if period_end < period_start:
         return jsonify({"error": "period_end cannot be before period_start."}), 400
 
+    purpose = data.get("purpose")
+    if not isinstance(purpose, str) or purpose not in {"rent", "utilities", "other"}:
+        return jsonify({"error": "purpose must be rent, utilities, or other."}), 400
+
     charges, error = _parse_charges(data.get("charges"))
     if error:
         return jsonify({"error": error}), 400
+
+    if any(charge["category"] != purpose for charge in charges):
+        return jsonify({"error": "Every charge category must match the invoice purpose."}), 400
+    if purpose == "utilities" and len(charges) != 1:
+        return jsonify({"error": "A utilities invoice must contain one combined utilities charge."}), 400
 
     duplicate = Invoice.query.filter_by(
         lease_id=lease.id,
         period_start=period_start,
         period_end=period_end,
+        purpose=purpose,
     ).first()
     if duplicate is not None:
-        return jsonify({"error": "An invoice already exists for this lease and period."}), 409
+        return jsonify({"error": "An invoice with this purpose already exists for this lease and period."}), 409
 
     invoice = Invoice(
         lease_id=lease.id,
         period_start=period_start,
         period_end=period_end,
         due_date=due_date,
+        purpose=purpose,
     )
     for charge_data in charges:
         charge = Charge(
@@ -253,7 +265,7 @@ def create_invoice():
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return jsonify({"error": "An invoice already exists for this lease and period."}), 409
+        return jsonify({"error": "An invoice with this purpose already exists for this lease and period."}), 409
     except SQLAlchemyError:
         db.session.rollback()
         current_app.logger.exception("Invoice creation failed")

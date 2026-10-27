@@ -160,27 +160,31 @@ def auth_headers(user_id):
     return {"Authorization": f"Bearer {token}"}
 
 
-def create_issued_invoice(client, headers, lease_id, *, period_start="2026-10-01"):
+def create_issued_invoice(
+    client, headers, lease_id, *, period_start="2026-10-01", purpose="rent"
+):
     period_end = date.fromisoformat(period_start) + timedelta(days=30)
+    if purpose == "utilities":
+        charges = [{
+            "category": "utilities",
+            "amount": "700.00",
+            "description": "Water and garbage",
+            "utility_breakdowns": [
+                {"category": "water", "amount": "450.00"},
+                {"category": "garbage", "amount": "250.00"},
+            ],
+        }]
+    else:
+        charges = [{"category": "rent", "amount": "8000.00", "description": "Rent"}]
     response = client.post(
         "/api/invoices",
         json={
             "lease_id": lease_id,
+            "purpose": purpose,
             "period_start": period_start,
             "period_end": period_end.isoformat(),
             "due_date": period_start,
-            "charges": [
-                {"category": "rent", "amount": "8000.00", "description": "Rent"},
-                {
-                    "category": "utilities",
-                    "amount": "700.00",
-                    "description": "Water and garbage",
-                    "utility_breakdowns": [
-                        {"category": "water", "amount": "450.00"},
-                        {"category": "garbage", "amount": "250.00"},
-                    ],
-                },
-            ],
+            "charges": charges,
         },
         headers=headers,
     )
@@ -302,9 +306,11 @@ def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_r
         invoice = create_issued_invoice(client, headers, lease_id)
         cleanup_records["invoices"].add(invoice["id"])
         rent_charge = next(c for c in invoice["charges"] if c["category"] == "rent")
-        utilities_charge = next(
-            c for c in invoice["charges"] if c["category"] == "utilities"
+        utilities_invoice = create_issued_invoice(
+            client, headers, lease_id, purpose="utilities"
         )
+        cleanup_records["invoices"].add(utilities_invoice["id"])
+        utilities_charge = utilities_invoice["charges"][0]
         payment_response = record_payment(client, headers, tenant_id, "1500.00")
         assert payment_response.status_code == 201
         payment = payment_response.get_json()["payment"]
@@ -325,6 +331,9 @@ def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_r
             f"/api/invoices/{invoice['id']}",
             headers=headers,
         )
+        utilities_response = client.get(
+            f"/api/invoices/{utilities_invoice['id']}", headers=headers
+        )
 
     assert allocated.status_code == 200
     result = allocated.get_json()
@@ -338,10 +347,14 @@ def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_r
     assert utilities_balance["paid_amount"] == "300.00"
     assert utilities_balance["outstanding_balance"] == "400.00"
 
-    invoice_data = invoice_response.get_json()["invoice"]
-    assert invoice_data["total_amount"] == "8700.00"
-    assert invoice_data["paid_amount"] == "1500.00"
-    assert invoice_data["outstanding_balance"] == "7200.00"
+    rent_invoice_data = invoice_response.get_json()["invoice"]
+    utilities_invoice_data = utilities_response.get_json()["invoice"]
+    assert rent_invoice_data["total_amount"] == "8000.00"
+    assert rent_invoice_data["paid_amount"] == "1200.00"
+    assert rent_invoice_data["outstanding_balance"] == "6800.00"
+    assert utilities_invoice_data["total_amount"] == "700.00"
+    assert utilities_invoice_data["paid_amount"] == "300.00"
+    assert utilities_invoice_data["outstanding_balance"] == "400.00"
 
 
 def test_allocations_cannot_exceed_payment_amount(app, cleanup_records):
@@ -460,7 +473,12 @@ def test_concurrent_allocations_cannot_exceed_payment_balance(app, cleanup_recor
     with app.test_client() as client:
         invoice = create_issued_invoice(client, headers, lease_id)
         cleanup_records["invoices"].add(invoice["id"])
-        rent, utilities = invoice["charges"]
+        utilities_invoice = create_issued_invoice(
+            client, headers, lease_id, purpose="utilities"
+        )
+        cleanup_records["invoices"].add(utilities_invoice["id"])
+        rent = invoice["charges"][0]
+        utilities = utilities_invoice["charges"][0]
         recorded = record_payment(client, headers, tenant_id, "1000.00")
         assert recorded.status_code == 201
         payment_id = recorded.get_json()["payment"]["id"]

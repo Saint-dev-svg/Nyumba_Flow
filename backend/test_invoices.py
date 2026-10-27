@@ -2,9 +2,13 @@
 
 import uuid
 from datetime import date, timedelta
+from threading import Barrier
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from flask_jwt_extended import create_access_token
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from extensions import db
 from models import (
@@ -136,13 +140,17 @@ def auth_headers(user_id):
     return {"Authorization": f"Bearer {token}"}
 
 
-def invoice_payload(lease_id, *, period_start="2026-10-01", period_end="2026-10-31"):
+def invoice_payload(
+    lease_id, *, period_start="2026-10-01", period_end="2026-10-31",
+    purpose="rent", charges=None,
+):
     return {
         "lease_id": lease_id,
+        "purpose": purpose,
         "period_start": period_start,
         "period_end": period_end,
         "due_date": "2026-10-05",
-        "charges": [
+        "charges": charges or [
             {
                 "category": "rent",
                 "amount": "15000.00",
@@ -177,6 +185,7 @@ def test_create_invoice_with_charges_for_active_owned_lease(app, cleanup_records
     assert invoice_data["period_start"] == "2026-10-01"
     assert invoice_data["period_end"] == "2026-10-31"
     assert invoice_data["status"] == "draft"
+    assert invoice_data["purpose"] == "rent"
     assert len(invoice_data["charges"]) == 1
     assert invoice_data["charges"][0]["category"] == "rent"
     assert invoice_data["charges"][0]["amount"] == "15000.00"
@@ -199,7 +208,7 @@ def test_invoice_creation_requires_an_active_lease(app, cleanup_records):
     assert response.status_code == 409
 
 
-def test_duplicate_billing_period_for_lease_is_rejected(app, cleanup_records):
+def test_rent_and_utilities_invoices_can_share_a_billing_period(app, cleanup_records):
     with app.app_context():
         landlord = create_landlord()
         property_obj, unit, tenant, lease = create_active_lease(landlord.id)
@@ -208,12 +217,168 @@ def test_duplicate_billing_period_for_lease_is_rejected(app, cleanup_records):
         headers = auth_headers(landlord.id)
 
     with app.test_client() as client:
-        first = create_invoice(client, headers, lease_id)
+        rent_draft = create_invoice(client, headers, lease_id)
+        assert rent_draft.status_code == 201
+        rent_invoice = rent_draft.get_json()["invoice"]
+        cleanup_records["invoices"].add(rent_invoice["id"])
+        utilities_draft = client.post(
+            "/api/invoices",
+            json=invoice_payload(
+                lease_id,
+                purpose="utilities",
+                charges=[{
+                    "category": "utilities",
+                    "amount": "700.00",
+                    "utility_breakdowns": [
+                        {"category": "water", "amount": "450.00"},
+                        {"category": "garbage", "amount": "250.00"},
+                    ],
+                }],
+            ),
+            headers=headers,
+        )
+        assert utilities_draft.status_code == 201
+        utilities_invoice = utilities_draft.get_json()["invoice"]
+        cleanup_records["invoices"].add(utilities_invoice["id"])
+        rent_issued = client.post(
+            f"/api/invoices/{rent_invoice['id']}/issue", headers=headers
+        )
+        utilities_issued = client.post(
+            f"/api/invoices/{utilities_invoice['id']}/issue", headers=headers
+        )
+
+    assert rent_invoice["purpose"] == "rent"
+    assert utilities_invoice["purpose"] == "utilities"
+    assert rent_issued.status_code == utilities_issued.status_code == 200
+    assert rent_issued.get_json()["invoice"]["status"] == "issued"
+    assert utilities_issued.get_json()["invoice"]["status"] == "issued"
+
+
+@pytest.mark.parametrize("purpose", ["rent", "utilities", "other"])
+def test_duplicate_invoice_purpose_for_billing_period_is_rejected(
+    app, cleanup_records, purpose
+):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    body = invoice_payload(lease_id, purpose=purpose)
+    if purpose == "utilities":
+        body["charges"] = [{
+            "category": "utilities",
+            "amount": "700.00",
+            "utility_breakdowns": [
+                {"category": "water", "amount": "450.00"},
+                {"category": "garbage", "amount": "250.00"},
+            ],
+        }]
+    elif purpose == "other":
+        body["charges"] = [{
+            "category": "other",
+            "amount": "25.00",
+            "description": "Other charge",
+        }]
+    with app.test_client() as client:
+        first = client.post("/api/invoices", json=body, headers=headers)
         assert first.status_code == 201
         cleanup_records["invoices"].add(first.get_json()["invoice"]["id"])
-        duplicate = create_invoice(client, headers, lease_id)
+        issue = client.post(
+            f"/api/invoices/{first.get_json()['invoice']['id']}/issue",
+            headers=headers,
+        )
+        assert issue.status_code == 200
+        duplicate = client.post("/api/invoices", json=body, headers=headers)
 
     assert duplicate.status_code == 409
+    assert "purpose" in duplicate.get_json()["error"]
+
+
+def test_invoice_purpose_must_match_charge_categories(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        mismatch = client.post(
+            "/api/invoices",
+            json=invoice_payload(lease_id, purpose="utilities"),
+            headers=headers,
+        )
+        multiple_utilities = client.post(
+            "/api/invoices",
+            json=invoice_payload(
+                lease_id,
+                purpose="utilities",
+                charges=[
+                    {"category": "utilities", "amount": "1.00", "utility_breakdowns": [
+                        {"category": "water", "amount": "1.00"},
+                        {"category": "garbage", "amount": "0.00"},
+                    ]},
+                    {"category": "utilities", "amount": "1.00", "utility_breakdowns": [
+                        {"category": "water", "amount": "1.00"},
+                        {"category": "garbage", "amount": "0.00"},
+                    ]},
+                ],
+            ),
+            headers=headers,
+        )
+
+    assert mismatch.status_code == 400
+    assert multiple_utilities.status_code == 400
+
+
+def test_concurrent_same_purpose_invoice_creation_is_rejected_by_database(
+    app, cleanup_records
+):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    barrier = Barrier(2)
+
+    def wait_before_invoice_flush(session, flush_context, instances):
+        if any(isinstance(obj, Invoice) for obj in session.new) and not session.info.get("invoice_creation_barrier"):
+            session.info["invoice_creation_barrier"] = True
+            barrier.wait(timeout=15)
+
+    event.listen(Session, "before_flush", wait_before_invoice_flush)
+    executor = ThreadPoolExecutor(max_workers=2)
+    try:
+        def create_concurrently():
+            with app.test_client() as client:
+                return client.post(
+                    "/api/invoices",
+                    json=invoice_payload(lease_id),
+                    headers=headers,
+                )
+
+        futures = [executor.submit(create_concurrently) for _ in range(2)]
+        responses = [future.result(timeout=30) for future in futures]
+    finally:
+        event.remove(Session, "before_flush", wait_before_invoice_flush)
+        executor.shutdown(wait=True, cancel_futures=True)
+        with app.app_context():
+            committed_ids = db.session.query(Invoice.id).filter_by(
+                lease_id=lease_id,
+                period_start=date.fromisoformat("2026-10-01"),
+                period_end=date.fromisoformat("2026-10-31"),
+                purpose="rent",
+            ).all()
+            cleanup_records["invoices"].update(invoice_id for (invoice_id,) in committed_ids)
+
+    created = [response for response in responses if response.status_code == 201]
+    rejected = [response for response in responses if response.status_code == 409]
+    assert len(created) == len(rejected) == 1
+    cleanup_records["invoices"].add(created[0].get_json()["invoice"]["id"])
 
 
 def test_landlord_can_only_create_and_list_their_own_invoices(app, cleanup_records):

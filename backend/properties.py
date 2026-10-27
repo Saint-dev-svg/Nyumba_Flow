@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from authorization import get_current_landlord_id
 from extensions import db
-from models import Property
+from models import Property, PropertyUtilitySettings
 
 
 properties_bp = Blueprint(
@@ -62,6 +62,10 @@ def create_property():
         owner_id=owner_id,
         name=name,
         address=address,
+        utility_settings=PropertyUtilitySettings(
+            water_rate="180.00",
+            garbage_fee="300.00",
+        ),
     )
 
     try:
