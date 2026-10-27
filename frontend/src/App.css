@@ -1171,6 +1171,290 @@ button.nav-item {
   gap: 18px;
 }
 
+.financial-report-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 230px) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px 18px;
+  margin-bottom: 28px;
+  padding: 17px 19px 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.financial-report-filters .field-group {
+  margin-bottom: 15px;
+}
+
+.financial-report-filters select {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid #cfd5cd;
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.financial-report-filters select:focus {
+  border-color: var(--color-accent);
+  outline: 3px solid rgb(69 107 85 / 16%);
+  outline-offset: 1px;
+}
+
+.financial-report-filters select:disabled {
+  background: #f6f7f4;
+}
+
+.report-timezone {
+  margin: 0 0 25px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.report-empty-note {
+  margin-bottom: 22px;
+  padding: 13px 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #fafbf8;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.report-section {
+  margin: 0 0 29px;
+}
+
+.report-section-heading {
+  margin-bottom: 12px;
+}
+
+.report-section-heading h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 620;
+}
+
+.report-section-heading p {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.report-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-metric {
+  display: grid;
+  min-width: 0;
+  min-height: 91px;
+  align-content: center;
+  gap: 9px;
+  padding: 15px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.report-metric > span {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.report-metric strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: clamp(15px, 1.7vw, 19px);
+  font-weight: 630;
+  letter-spacing: -0.25px;
+}
+
+.report-metric-emphasis {
+  border-color: #cfdbcf;
+  background: #f7faf6;
+}
+
+.report-metric-emphasis strong {
+  color: var(--color-accent-hover);
+}
+
+.report-utility-breakdown {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 9px 20px;
+  margin-top: 9px;
+  padding: 13px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #fafbf8;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.report-utility-breakdown strong {
+  color: var(--color-text);
+}
+
+.report-utility-breakdown small {
+  flex-basis: 100%;
+  font-size: 10px;
+}
+
+.report-rate-explanation {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 12px;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.report-rate-explanation p {
+  margin: 0;
+}
+
+.report-rate-explanation strong {
+  color: var(--color-text);
+}
+
+.report-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.report-rate-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.report-rate-table th,
+.report-rate-table td {
+  min-width: 140px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.report-rate-table thead th {
+  color: var(--color-text);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.report-rate-table tbody th {
+  color: var(--color-text);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.report-rate-table tr:last-child th,
+.report-rate-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.report-property-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-property-card {
+  min-width: 0;
+  padding: 15px 17px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.report-property-heading,
+.report-property-metrics {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-property-heading {
+  align-items: baseline;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.report-property-heading h4 {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.report-property-heading span {
+  flex: 0 0 auto;
+  color: var(--color-accent-hover);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.report-property-metrics {
+  flex-wrap: wrap;
+  padding-top: 11px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.report-property-metrics span {
+  display: grid;
+  gap: 5px;
+}
+
+.report-property-metrics strong {
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .financial-report-filters {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 15px 15px 0;
+  }
+
+  .financial-report-filters .field-group {
+    margin-bottom: 14px;
+  }
+
+  .report-timezone {
+    margin-bottom: 14px;
+  }
+
+  .report-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-property-heading,
+  .report-property-metrics {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .utility-billing-heading h3,
 .meter-reading-table-heading h4,
 .generation-summary h4 {

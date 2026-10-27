@@ -140,6 +140,7 @@ function LoginScreen() {
 
 const navigationItems = [
   { label: 'Overview', available: true },
+  { label: 'Financial Overview', available: true },
   { label: 'Properties', available: true },
   { label: 'Tenants', available: true },
   { label: 'Leases', available: true },
@@ -1955,6 +1956,171 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
   )
 }
 
+function FinancialOverviewPage() {
+  const [month, setMonth] = useState(currentBillingMonth)
+  const [propertyId, setPropertyId] = useState('')
+  const [reportState, setReportState] = useState({ loading: true, properties: [], report: null, error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+    async function loadReport() {
+      setReportState((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const params = new URLSearchParams({ month })
+        if (propertyId) params.set('property_id', propertyId)
+        const [propertyResult, report] = await Promise.all([
+          apiRequest('/api/properties', { authenticated: true }),
+          apiRequest(`/api/reports/financial?${params.toString()}`, { authenticated: true }),
+        ])
+        if (!Array.isArray(propertyResult?.properties) || !report?.billed_during_month) {
+          throw new Error('Financial overview data could not be read. Please try again.')
+        }
+        if (isCurrent) setReportState({ loading: false, properties: propertyResult.properties, report, error: '' })
+      } catch (error) {
+        if (isCurrent) setReportState((current) => ({ ...current, loading: false, error: error.message || 'Unable to load financial data.' }))
+      }
+    }
+    loadReport()
+    return () => { isCurrent = false }
+  }, [month, propertyId, retryCount])
+
+  const report = reportState.report
+  const billed = report?.billed_during_month
+  const collections = report?.allocations_received_during_month
+  const outstanding = report?.outstanding_current_issued_invoices
+  const collectionRates = report?.collection_rates_percent
+
+  function percentage(value) {
+    return value === null || value === undefined ? '—' : `${value}%`
+  }
+
+  return (
+    <section className="management-page financial-overview-page" aria-labelledby="financial-overview-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Portfolio reporting</p>
+          <h2 id="financial-overview-heading">Financial Overview</h2>
+          <p>Review billed charges, allocations, and current invoice balances for your portfolio.</p>
+        </div>
+      </div>
+
+      <div className="financial-report-filters">
+        <div className="field-group">
+          <label htmlFor="financial-report-month">Reporting month</label>
+          <input id="financial-report-month" type="month" value={month} disabled={reportState.loading} onChange={(event) => setMonth(event.target.value)} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="financial-report-property">Property</label>
+          <select id="financial-report-property" value={propertyId} disabled={reportState.loading} onChange={(event) => setPropertyId(event.target.value)}>
+            <option value="">All properties</option>
+            {reportState.properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}
+          </select>
+        </div>
+        {report && <p className="report-timezone">Reporting calendar: {report.timezone}</p>}
+      </div>
+
+      {reportState.loading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading financial overview…</div>
+      ) : reportState.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Financial overview could not be loaded</h4><p>{reportState.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Try again</button>
+        </div>
+      ) : (
+        <>
+          {reportState.properties.length === 0 && (
+            <div className="report-empty-note">No properties are registered yet. Financial totals will appear here after invoices and allocations are recorded.</div>
+          )}
+
+          <section className="report-section" aria-labelledby="billed-heading">
+            <div className="report-section-heading"><div><h3 id="billed-heading">Billed during {month}</h3><p>Charges on invoices issued during this month.</p></div></div>
+            <div className="report-metric-grid report-purpose-grid">
+              {[
+                ['Rent', billed.rent],
+                ['Utilities', billed.utilities],
+                ['Other', billed.other],
+                ['Total billed', billed.total],
+              ].map(([label, amount]) => (
+                <article className={`report-metric${label === 'Total billed' ? ' report-metric-emphasis' : ''}`} key={label}>
+                  <span>{label}</span><strong>{formatKes(amount)}</strong>
+                </article>
+              ))}
+            </div>
+            <div className="report-utility-breakdown">
+              <strong>Utilities detail</strong>
+              <span>Water {formatKes(report.utility_breakdown_billed_during_month.water)}</span>
+              <span>Garbage {formatKes(report.utility_breakdown_billed_during_month.garbage)}</span>
+              <small>Water and garbage are included in the utilities amount above.</small>
+            </div>
+          </section>
+
+          <section className="report-section" aria-labelledby="collections-heading">
+            <div className="report-section-heading"><div><h3 id="collections-heading">Allocated during {month}</h3><p>Payment allocations created this month, including allocations to older invoices.</p></div></div>
+            <div className="report-metric-grid">
+              {[
+                ['Rent allocations', collections.rent],
+                ['Utilities allocations', collections.utilities],
+                ['Other allocations', collections.other],
+                ['Total allocated', collections.total],
+              ].map(([label, amount]) => <article className="report-metric" key={label}><span>{label}</span><strong>{formatKes(amount)}</strong></article>)}
+            </div>
+          </section>
+
+          <section className="report-section" aria-labelledby="outstanding-heading">
+            <div className="report-section-heading"><div><h3 id="outstanding-heading">Current outstanding balances</h3><p>As of {new Date(report.outstanding_as_of).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })} EAT · all issued invoices, including older months.</p></div></div>
+            <div className="report-metric-grid">
+              {[
+                ['Rent outstanding', outstanding.rent],
+                ['Utilities outstanding', outstanding.utilities],
+                ['Other outstanding', outstanding.other],
+                ['Total outstanding', outstanding.total],
+              ].map(([label, amount]) => <article className="report-metric" key={label}><span>{label}</span><strong>{formatKes(amount)}</strong></article>)}
+            </div>
+          </section>
+
+          <section className="report-section" aria-labelledby="collection-rate-heading">
+            <div className="report-section-heading"><div><h3 id="collection-rate-heading">Collection rates</h3><p>Each rate uses billed amounts for the selected month as its denominator. A dash means there was no billed amount.</p></div></div>
+            <div className="report-rate-explanation"><p><strong>Current collection on this month’s invoices:</strong> allocations currently applied to invoices issued this month ÷ this month’s billed amount.</p><p><strong>Allocated during this month:</strong> allocations created this month ÷ this month’s billed amount. This can exceed 100% when older arrears are collected.</p></div>
+            <div className="report-table-wrap">
+              <table className="report-rate-table">
+                <thead><tr><th scope="col">Purpose</th><th scope="col">Current on this month’s invoices</th><th scope="col">Allocated during this month</th></tr></thead>
+                <tbody>{['rent', 'utilities', 'other', 'total'].map((purpose) => (
+                  <tr key={purpose}>
+                    <th scope="row">{purpose === 'total' ? 'All purposes' : purpose[0].toUpperCase() + purpose.slice(1)}</th>
+                    <td>{percentage(collectionRates[purpose].current_paid_on_invoices_issued_in_month.rate)}</td>
+                    <td>{percentage(collectionRates[purpose].allocations_received_during_month.rate)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="report-section" aria-labelledby="property-breakdown-heading">
+            <div className="report-section-heading"><div><h3 id="property-breakdown-heading">By property</h3><p>Monthly activity and current outstanding balances for each property in the selection.</p></div></div>
+            {report.property_breakdown.length === 0 ? (
+              <div className="overview-empty compact-empty"><h4>No property breakdown to show</h4><p>Add properties and issue invoices to see financial activity by property.</p></div>
+            ) : (
+              <ul className="report-property-list">
+                {report.property_breakdown.map((item) => (
+                  <li className="report-property-card" key={item.property_id}>
+                    <div className="report-property-heading"><h4>{item.property_name}</h4><span>{formatKes(item.billed_during_month.total)} billed</span></div>
+                    <div className="report-property-metrics">
+                      <span>Allocated this month <strong>{formatKes(item.allocations_received_during_month.total)}</strong></span>
+                      <span>Current outstanding <strong>{formatKes(item.outstanding_current_issued_invoices.total)}</strong></span>
+                      <span>Water / garbage <strong>{formatKes(item.utility_breakdown_billed_during_month.water)} / {formatKes(item.utility_breakdown_billed_during_month.garbage)}</strong></span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      )}
+    </section>
+  )
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2068,6 +2234,8 @@ function DashboardShell({ user }) {
               </section>
               <PropertyOverview refreshKey={dataVersion} />
             </>
+          ) : page === 'Financial Overview' ? (
+            <FinancialOverviewPage />
           ) : page === 'Properties' ? (
             <PropertiesPage onDataChanged={() => setDataVersion((version) => version + 1)} />
           ) : page === 'Tenants' ? (

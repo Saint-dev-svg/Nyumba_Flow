@@ -12,6 +12,7 @@ from invoices import invoices_bp
 from leases import leases_bp
 from payments import payments_bp
 from properties import properties_bp
+from reports import reports_bp
 from tenants import tenants_bp
 from units import units_bp
 from utility_billing import utility_billing_bp
@@ -52,6 +53,7 @@ def create_app(test_config=None):
     app.register_blueprint(leases_bp)
     app.register_blueprint(payments_bp)
     app.register_blueprint(properties_bp)
+    app.register_blueprint(reports_bp)
     app.register_blueprint(tenants_bp)
     app.register_blueprint(units_bp)
     app.register_blueprint(utility_billing_bp)
