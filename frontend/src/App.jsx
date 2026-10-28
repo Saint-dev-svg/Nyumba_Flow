@@ -696,6 +696,7 @@ function TenantsPage() {
   const [isEditing, setIsEditing] = useState(false)
   const [listReload, setListReload] = useState(0)
   const [detailReload, setDetailReload] = useState(0)
+  const [showStatement, setShowStatement] = useState(false)
 
   useEffect(() => {
     let isCurrent = true
@@ -744,6 +745,7 @@ function TenantsPage() {
     setSelectedTenantId(null)
     setTenantDetails({ loading: false, tenant: null, error: '' })
     setIsEditing(false)
+    setShowStatement(false)
   }
 
   if (selectedTenantId !== null) {
@@ -768,7 +770,10 @@ function TenantsPage() {
                 <p>{tenantDetails.tenant.email}</p>
               </div>
               {!isEditing && (
-                <button className="primary-button compact-button" type="button" onClick={() => setIsEditing(true)}>Edit details</button>
+                <div className="tenant-detail-actions">
+                  <button className="secondary-button compact-button" type="button" onClick={() => setShowStatement(true)}>View statement</button>
+                  <button className="primary-button compact-button" type="button" onClick={() => setIsEditing(true)}>Edit details</button>
+                </div>
               )}
             </div>
             {isEditing ? (
@@ -782,6 +787,9 @@ function TenantsPage() {
               </dl>
             )}
           </>
+        )}
+        {showStatement && !isEditing && tenantDetails.tenant && (
+          <TenantStatement tenant={tenantDetails.tenant} onBack={() => setShowStatement(false)} />
         )}
       </section>
     )
@@ -834,6 +842,276 @@ function TenantsPage() {
         </ul>
       )}
     </section>
+  )
+}
+
+function formatStatementMoney(value, currency = 'KES') {
+  if (value === null || value === undefined) return '—'
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(String(value))
+  if (!match) return '—'
+  const [, sign, whole, fraction = ''] = match
+  const groupedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const amount = `${sign}${groupedWhole}.${fraction.padEnd(2, '0').slice(0, 2)}`
+  return currency === 'KES' ? `KSh ${amount}` : `${currency} ${amount}`
+}
+
+function formatStatementDate(value, includeTime = false) {
+  if (!value) return '—'
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value)
+  const parsed = new Date(dateOnly ? `${value}T00:00:00Z` : value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('en-KE', {
+    dateStyle: 'medium',
+    ...(includeTime ? { timeStyle: 'short' } : {}),
+    timeZone: dateOnly ? 'UTC' : 'Africa/Nairobi',
+  }).format(parsed)
+}
+
+function statementPurposeLabel(purpose) {
+  return ({ rent: 'Rent', utilities: 'Utilities', other: 'Other' })[purpose] || 'Other'
+}
+
+function isValidStatementDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
+function TenantStatement({ tenant, onBack }) {
+  const [filters, setFilters] = useState({ startDate: '', endDate: '' })
+  const [appliedRange, setAppliedRange] = useState({ startDate: '', endDate: '' })
+  const [rangeError, setRangeError] = useState('')
+  const [statementState, setStatementState] = useState({ loading: true, statement: null, error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    const printScopeClass = 'tenant-statement-print-active'
+    document.body.classList.add(printScopeClass)
+    return () => document.body.classList.remove(printScopeClass)
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function fetchStatement() {
+      setStatementState({ loading: true, statement: null, error: '' })
+      const params = new URLSearchParams()
+      if (appliedRange.startDate) params.set('start_date', appliedRange.startDate)
+      if (appliedRange.endDate) params.set('end_date', appliedRange.endDate)
+      const query = params.toString()
+      const path = `/api/tenants/${encodeURIComponent(tenant.id)}/statement${query ? `?${query}` : ''}`
+
+      try {
+        const result = await apiRequest(path, { authenticated: true })
+        if (
+          !result?.tenant
+          || !Array.isArray(result.invoices)
+          || !Array.isArray(result.payments)
+          || !Array.isArray(result.transaction_history)
+          || !result.summary
+        ) {
+          throw new Error('The tenant statement could not be read. Please try again.')
+        }
+        if (isCurrent) setStatementState({ loading: false, statement: result, error: '' })
+      } catch (error) {
+        if (isCurrent) {
+          setStatementState({ loading: false, statement: null, error: error.message || 'Unable to load this statement. Please try again.' })
+        }
+      }
+    }
+
+    fetchStatement()
+    return () => { isCurrent = false }
+  }, [tenant.id, appliedRange, retryCount])
+
+  function applyFilters(event) {
+    event.preventDefault()
+    const { startDate, endDate } = filters
+    if (startDate && !isValidStatementDate(startDate)) {
+      setRangeError('Enter a valid start date.')
+      return
+    }
+    if (endDate && !isValidStatementDate(endDate)) {
+      setRangeError('Enter a valid end date.')
+      return
+    }
+    if (startDate && endDate && startDate > endDate) {
+      setRangeError('Start date must be on or before the end date.')
+      return
+    }
+    setRangeError('')
+    setAppliedRange({ startDate, endDate })
+    setRetryCount((count) => count + 1)
+  }
+
+  function resetFilters() {
+    setFilters({ startDate: '', endDate: '' })
+    setAppliedRange({ startDate: '', endDate: '' })
+    setRangeError('')
+    setRetryCount((count) => count + 1)
+  }
+
+  const statement = statementState.statement
+  const periodLabel = !appliedRange.startDate && !appliedRange.endDate
+    ? 'All available history'
+    : appliedRange.startDate && appliedRange.endDate
+      ? `${formatStatementDate(appliedRange.startDate)} – ${formatStatementDate(appliedRange.endDate)} (inclusive)`
+      : appliedRange.startDate
+        ? `From ${formatStatementDate(appliedRange.startDate)} onward`
+        : `Through ${formatStatementDate(appliedRange.endDate)} (inclusive)`
+  const hasActivity = Boolean(statement && (
+    statement.invoices.length || statement.payments.length || statement.transaction_history.length
+  ))
+
+  return (
+    <div className="tenant-statement-print-root">
+      <div className="tenant-statement-toolbar statement-screen-only">
+        <button className="back-button" type="button" onClick={onBack}><span aria-hidden="true">←</span> Tenant details</button>
+        <button className="secondary-button compact-button" type="button" onClick={() => window.print()} disabled={!statement || statementState.loading}>Print statement</button>
+      </div>
+      <div className="management-page-heading tenant-statement-heading">
+        <div>
+          <p className="eyebrow">Tenant account</p>
+          <h2>Statement for {tenant.full_name}</h2>
+          <p>{tenant.email}</p>
+        </div>
+      </div>
+
+      <form className="tenant-statement-filters statement-screen-only" onSubmit={applyFilters}>
+        <div className="field-group">
+          <label htmlFor="statement-start-date">Start date</label>
+          <input id="statement-start-date" type="date" value={filters.startDate} onChange={(event) => setFilters((current) => ({ ...current, startDate: event.target.value }))} />
+        </div>
+        <div className="field-group">
+          <label htmlFor="statement-end-date">End date</label>
+          <input id="statement-end-date" type="date" value={filters.endDate} onChange={(event) => setFilters((current) => ({ ...current, endDate: event.target.value }))} />
+        </div>
+        <div className="tenant-statement-filter-actions">
+          <button className="primary-button compact-button" type="submit" disabled={statementState.loading}>Apply filters</button>
+          <button className="secondary-button compact-button" type="button" onClick={resetFilters} disabled={statementState.loading && !appliedRange.startDate && !appliedRange.endDate}>All history</button>
+        </div>
+        {rangeError && <p className="form-error tenant-statement-range-error" role="alert">{rangeError}</p>}
+      </form>
+
+      <p className="tenant-statement-period"><strong>Activity period:</strong> {periodLabel} <span>· Dates use Africa/Nairobi local time.</span></p>
+      {statementState.loading ? (
+        <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading tenant statement…</div>
+      ) : statementState.error ? (
+        <div className="overview-message overview-error statement-screen-only" role="alert">
+          <div><h4>Statement could not be loaded</h4><p>{statementState.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Try again</button>
+        </div>
+      ) : statement ? (
+        <>
+          <p className="tenant-statement-explanation">Receipt totals use the payment received date. Allocation credits use the date funds were applied to charges. Current outstanding balances reflect issued invoices as of now, independent of this activity period.</p>
+          <section className="tenant-statement-summary" aria-label="Statement financial summary">
+            <StatementSummaryCard title="Billed during period" totals={statement.summary.billed_during_period} />
+            <StatementSummaryCard title="Allocated during period" totals={statement.summary.allocated_during_period} />
+            <article className="tenant-statement-summary-card">
+              <h3>Payments received during period</h3>
+              <strong>{formatStatementMoney(statement.summary.payments_received_during_period)}</strong>
+              <p>Gross receipts, counted by received date.</p>
+            </article>
+            <StatementSummaryCard title="Current outstanding balance" totals={statement.summary.current_outstanding_balance} note="Current balance on issued invoices." />
+          </section>
+
+          {!hasActivity ? (
+            <div className="overview-empty compact-empty tenant-statement-empty">
+              <h3>No financial activity for this tenant</h3>
+              <p>No issued invoices, received payments, or allocations were found for the selected period.</p>
+            </div>
+          ) : (
+            <>
+              <section className="tenant-statement-section" aria-labelledby="statement-invoices-heading">
+                <div className="property-section-heading"><div><p className="eyebrow">Billing activity</p><h3 id="statement-invoices-heading">Invoices issued in period</h3></div></div>
+                {statement.invoices.length === 0 ? <p className="tenant-statement-no-items">No invoices were issued during this period.</p> : (
+                  <ul className="tenant-statement-invoice-list">
+                    {statement.invoices.map((invoice) => (
+                      <li className="tenant-statement-invoice" key={invoice.id}>
+                        <div className="tenant-statement-item-heading">
+                          <div><h4>Invoice #{invoice.id} · {statementPurposeLabel(invoice.purpose)}</h4><p>{invoice.property?.name || 'Property unavailable'} · Unit {invoice.unit?.unit_number || '—'}</p></div>
+                          <span className={`invoice-lifecycle status-${invoice.status}`}>{invoice.status || 'Unknown'}</span>
+                        </div>
+                        <p className="tenant-statement-item-subtitle">Billing period {formatStatementDate(invoice.period_start)} – {formatStatementDate(invoice.period_end)} · Issued {formatStatementDate(invoice.issued_at, true)} · Due {formatStatementDate(invoice.due_date)}</p>
+                        <div className="tenant-statement-invoice-totals">
+                          <span>Total <strong>{formatStatementMoney(invoice.total_amount)}</strong></span>
+                          <span>Paid to date <strong>{formatStatementMoney(invoice.current_paid_amount)}</strong></span>
+                          <span>Outstanding now <strong>{formatStatementMoney(invoice.current_outstanding_balance)}</strong></span>
+                          <span>Allocated in period <strong>{formatStatementMoney(invoice.allocations_during_period)}</strong></span>
+                        </div>
+                        {invoice.charges?.length > 0 && <ul className="tenant-statement-charges">
+                          {invoice.charges.map((charge) => <li key={charge.id}>
+                            <div><strong>{charge.description || `${statementPurposeLabel(charge.category)} charge`}</strong><span>{statementPurposeLabel(charge.category)}</span></div>
+                            <strong>{formatStatementMoney(charge.amount)}</strong>
+                            {charge.utility_breakdowns?.length > 0 && <ul className="tenant-statement-breakdowns">
+                              {charge.utility_breakdowns.map((breakdown) => <li key={breakdown.category}>{breakdown.category === 'water' ? 'Water' : breakdown.category === 'garbage' ? 'Garbage' : breakdown.category}: {formatStatementMoney(breakdown.amount)}</li>)}
+                            </ul>}
+                          </li>)}
+                        </ul>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="tenant-statement-section" aria-labelledby="statement-payments-heading">
+                <div className="property-section-heading"><div><p className="eyebrow">Receipts and allocations</p><h3 id="statement-payments-heading">Payment history</h3></div></div>
+                {statement.payments.length === 0 ? <p className="tenant-statement-no-items">No payments were received or allocated during this period.</p> : (
+                  <ul className="tenant-statement-payment-list">
+                    {statement.payments.map((payment) => <li className="tenant-statement-payment" key={payment.id}>
+                      <div className="tenant-statement-item-heading">
+                        <div><h4>{payment.receipt_number || `Payment #${payment.id}`}</h4><p>Received {formatStatementDate(payment.received_at, true)} · {payment.method || 'Payment method unavailable'}</p></div>
+                        <strong>{formatStatementMoney(payment.amount, payment.currency)}</strong>
+                      </div>
+                      <div className="tenant-statement-payment-meta">
+                        <span>Allocated in period <strong>{formatStatementMoney(payment.allocated_amount_during_period)}</strong></span>
+                        <span>Currently allocated <strong>{formatStatementMoney(payment.current_allocated_amount)}</strong></span>
+                        <span>Currently unallocated <strong>{formatStatementMoney(payment.current_unallocated_amount)}</strong></span>
+                      </div>
+                      {payment.allocations?.length > 0 && <ul className="tenant-statement-allocation-list">
+                        {payment.allocations.map((allocation, index) => <li key={`${allocation.invoice_id}-${allocation.charge_id}-${index}`}>
+                          <span>Invoice #{allocation.invoice_id} · {statementPurposeLabel(allocation.purpose)} · {allocation.description || statementPurposeLabel(allocation.charge_category)}</span>
+                          <span>Allocated {formatStatementDate(allocation.allocated_at, true)}</span>
+                          <strong>{formatStatementMoney(allocation.amount)}</strong>
+                        </li>)}
+                      </ul>}
+                    </li>)}
+                  </ul>
+                )}
+              </section>
+
+              <section className="tenant-statement-section" aria-labelledby="statement-activity-heading">
+                <div className="property-section-heading"><div><p className="eyebrow">Dated entries</p><h3 id="statement-activity-heading">Transaction history</h3></div></div>
+                {statement.transaction_history.length === 0 ? <p className="tenant-statement-no-items">No invoice or allocation entries fall within this period.</p> : (
+                  <ul className="tenant-statement-transaction-list">
+                    {statement.transaction_history.map((event, index) => <li className="tenant-statement-transaction" key={`${event.type}-${event.invoice_id}-${event.charge_id}-${event.event_at}-${index}`}>
+                      <div><strong>{event.type === 'invoice_charge' ? 'Invoice charge' : 'Payment allocation'}</strong><span>{formatStatementDate(event.event_at, true)}</span></div>
+                      <div><span>Invoice #{event.invoice_id} · {statementPurposeLabel(event.purpose)}</span><span>{event.description || '—'}</span></div>
+                      <strong>{formatStatementMoney(event.amount)}</strong>
+                    </li>)}
+                  </ul>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function StatementSummaryCard({ title, totals, note }) {
+  return (
+    <article className="tenant-statement-summary-card">
+      <h3>{title}</h3>
+      <strong>{formatStatementMoney(totals?.total)}</strong>
+      <dl>
+        {['rent', 'utilities', 'other'].map((category) => <div key={category}>
+          <dt>{statementPurposeLabel(category)}</dt><dd>{formatStatementMoney(totals?.[category])}</dd>
+        </div>)}
+      </dl>
+      {note && <p>{note}</p>}
+    </article>
   )
 }
 

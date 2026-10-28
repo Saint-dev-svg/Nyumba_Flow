@@ -2543,3 +2543,485 @@ button.nav-item {
     align-items: flex-start;
   }
 }
+
+.tenant-detail-actions,
+.tenant-statement-toolbar,
+.tenant-statement-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.tenant-detail-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tenant-statement-print-root {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--color-border);
+}
+
+.tenant-statement-toolbar {
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.tenant-statement-heading {
+  margin-bottom: 21px;
+}
+
+.tenant-statement-heading h2 {
+  overflow-wrap: anywhere;
+}
+
+.tenant-statement-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 220px)) auto;
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 15px;
+  padding: 17px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.tenant-statement-filters .field-group {
+  min-width: 0;
+  margin: 0;
+}
+
+.tenant-statement-filters .field-group input {
+  min-height: 42px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.tenant-statement-filter-actions {
+  align-self: end;
+  flex-wrap: wrap;
+}
+
+.tenant-statement-filter-actions .compact-button {
+  min-height: 42px;
+  margin: 0;
+}
+
+.tenant-statement-range-error {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+}
+
+.tenant-statement-period {
+  margin: 0 0 13px;
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tenant-statement-period span,
+.tenant-statement-explanation {
+  color: var(--color-muted);
+}
+
+.tenant-statement-explanation {
+  margin: 0 0 19px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tenant-statement-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 30px;
+}
+
+.tenant-statement-summary-card {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.tenant-statement-summary-card h3 {
+  margin: 0 0 11px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tenant-statement-summary-card > strong {
+  color: var(--color-text);
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.4px;
+}
+
+.tenant-statement-summary-card dl {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding-top: 11px;
+  border-top: 1px solid var(--color-border);
+}
+
+.tenant-statement-summary-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.tenant-statement-summary-card dt,
+.tenant-statement-summary-card dd {
+  margin: 0;
+}
+
+.tenant-statement-summary-card dd {
+  color: var(--color-text);
+  font-weight: 600;
+  text-align: right;
+}
+
+.tenant-statement-summary-card > p {
+  margin: 13px 0 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tenant-statement-section {
+  margin: 0 0 27px;
+}
+
+.tenant-statement-section .property-section-heading {
+  margin-bottom: 12px;
+}
+
+.tenant-statement-section .property-section-heading .eyebrow {
+  margin: 0 0 5px;
+}
+
+.tenant-statement-invoice-list,
+.tenant-statement-payment-list,
+.tenant-statement-transaction-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-statement-invoice,
+.tenant-statement-payment {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.tenant-statement-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tenant-statement-item-heading h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 630;
+}
+
+.tenant-statement-item-heading p,
+.tenant-statement-item-subtitle {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tenant-statement-item-heading > strong {
+  flex: 0 0 auto;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.tenant-statement-item-subtitle {
+  margin-top: 11px;
+}
+
+.tenant-statement-invoice-totals,
+.tenant-statement-payment-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--radius-control);
+  background: #f7f8f5;
+}
+
+.tenant-statement-invoice-totals span,
+.tenant-statement-payment-meta span {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.tenant-statement-invoice-totals strong,
+.tenant-statement-payment-meta strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.tenant-statement-charges,
+.tenant-statement-allocation-list {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-statement-charges > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.tenant-statement-charges > li > div {
+  display: grid;
+  gap: 4px;
+}
+
+.tenant-statement-charges > li > div span {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.tenant-statement-breakdowns {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 18px;
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid #cbd8cc;
+  background: #f8faf7;
+  color: var(--color-muted);
+  list-style: none;
+}
+
+.tenant-statement-allocation-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.tenant-statement-allocation-list strong {
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.tenant-statement-transaction {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.5fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+}
+
+.tenant-statement-transaction > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tenant-statement-transaction > div span,
+.tenant-statement-transaction > div strong {
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.tenant-statement-transaction > div strong {
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.tenant-statement-transaction > strong {
+  color: var(--color-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tenant-statement-no-items {
+  margin: 0;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.tenant-statement-empty {
+  min-height: 180px;
+}
+
+@media (max-width: 760px) {
+  .tenant-detail-actions {
+    justify-content: flex-start;
+  }
+
+  .tenant-statement-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .tenant-statement-filter-actions {
+    grid-column: 1 / -1;
+  }
+
+  .tenant-statement-summary {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .tenant-statement-invoice-totals,
+  .tenant-statement-payment-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tenant-statement-transaction {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tenant-statement-transaction > div:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 440px) {
+  .tenant-statement-toolbar,
+  .tenant-statement-item-heading {
+    align-items: flex-start;
+  }
+
+  .tenant-statement-toolbar {
+    flex-direction: column;
+  }
+
+  .tenant-statement-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tenant-statement-filter-actions,
+  .tenant-statement-range-error {
+    grid-column: auto;
+  }
+
+  .tenant-statement-item-heading {
+    flex-direction: column;
+  }
+
+  .tenant-statement-allocation-list > li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+}
+
+@media print {
+  body.tenant-statement-print-active * {
+    visibility: hidden !important;
+  }
+
+  body.tenant-statement-print-active .tenant-statement-print-root,
+  body.tenant-statement-print-active .tenant-statement-print-root * {
+    visibility: visible !important;
+  }
+
+  body.tenant-statement-print-active .tenant-statement-print-root {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: #111 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+
+  body.tenant-statement-print-active .statement-screen-only,
+  body.tenant-statement-print-active .tenant-statement-filters,
+  body.tenant-statement-print-active .tenant-statement-toolbar {
+    display: none !important;
+  }
+
+  body.tenant-statement-print-active .tenant-statement-summary-card,
+  body.tenant-statement-print-active .tenant-statement-invoice,
+  body.tenant-statement-print-active .tenant-statement-payment,
+  body.tenant-statement-print-active .tenant-statement-transaction,
+  body.tenant-statement-print-active .tenant-statement-no-items {
+    break-inside: avoid;
+    border-color: #999 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    color: #111 !important;
+  }
+
+  body.tenant-statement-print-active .tenant-statement-invoice-list,
+  body.tenant-statement-print-active .tenant-statement-payment-list,
+  body.tenant-statement-print-active .tenant-statement-transaction-list {
+    gap: 6px;
+  }
+
+  body.tenant-statement-print-active .tenant-statement-heading,
+  body.tenant-statement-print-active .tenant-statement-section .property-section-heading,
+  body.tenant-statement-print-active .tenant-statement-period,
+  body.tenant-statement-print-active .tenant-statement-explanation,
+  body.tenant-statement-print-active .tenant-statement-summary-card h3,
+  body.tenant-statement-print-active .tenant-statement-summary-card > strong,
+  body.tenant-statement-print-active .tenant-statement-summary-card dl > div,
+  body.tenant-statement-print-active .tenant-statement-summary-card dd,
+  body.tenant-statement-print-active .tenant-statement-item-heading h4,
+  body.tenant-statement-print-active .tenant-statement-item-heading p,
+  body.tenant-statement-print-active .tenant-statement-item-subtitle,
+  body.tenant-statement-print-active .tenant-statement-invoice-totals span,
+  body.tenant-statement-print-active .tenant-statement-invoice-totals strong,
+  body.tenant-statement-print-active .tenant-statement-payment-meta span,
+  body.tenant-statement-print-active .tenant-statement-payment-meta strong,
+  body.tenant-statement-print-active .tenant-statement-transaction > div span,
+  body.tenant-statement-print-active .tenant-statement-transaction > div strong,
+  body.tenant-statement-print-active .tenant-statement-transaction > strong {
+    color: #111 !important;
+  }
+}
