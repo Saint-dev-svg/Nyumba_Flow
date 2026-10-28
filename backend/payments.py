@@ -172,6 +172,8 @@ def record_payment():
     if not isinstance(currency, str) or len(currency) != 3:
         return jsonify({"error": "currency must contain exactly three characters."}), 400
     currency = currency.upper()
+    if currency != "KES":
+        return jsonify({"error": "Only KES payments are supported."}), 400
 
     reference = data.get("reference")
     if reference is not None:
@@ -227,6 +229,8 @@ def allocate_payment(payment_id):
     )
     if payment is None:
         return jsonify({"error": "Payment not found."}), 404
+    if payment.currency != "KES":
+        return jsonify({"error": "Only KES payments can be allocated."}), 409
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not isinstance(data.get("allocations"), list):

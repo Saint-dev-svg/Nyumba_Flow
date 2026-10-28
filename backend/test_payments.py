@@ -293,6 +293,82 @@ def test_record_payment_creates_receipt_for_owned_tenant(app, cleanup_records):
     assert body["receipt"]["receipt_number"].startswith("NF-")
 
 
+def test_record_payment_rejects_non_kes_without_persisting_records(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        record_setup(cleanup_records, landlord, tenant)
+        landlord_id, tenant_id = landlord.id, tenant.id
+        headers = auth_headers(landlord_id)
+        payments_before = Payment.query.filter_by(tenant_id=tenant_id).count()
+        receipts_before = Receipt.query.join(Payment).filter(
+            Payment.tenant_id == tenant_id
+        ).count()
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/payments",
+            json={
+                "tenant_id": tenant_id,
+                "amount": "125.00",
+                "currency": "USD",
+                "method": "cash",
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Only KES payments are supported."}
+    with app.app_context():
+        assert Payment.query.filter_by(tenant_id=tenant_id).count() == payments_before
+        assert Receipt.query.join(Payment).filter(
+            Payment.tenant_id == tenant_id
+        ).count() == receipts_before
+        assert PaymentAllocation.query.join(Payment).filter(
+            Payment.tenant_id == tenant_id
+        ).count() == 0
+
+
+def test_allocation_rejects_existing_non_kes_payment(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        landlord_id, tenant_id, lease_id = landlord.id, tenant.id, lease.id
+        headers = auth_headers(landlord_id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease_id)
+        cleanup_records["invoices"].add(invoice["id"])
+        charge_id = invoice["charges"][0]["id"]
+
+    with app.app_context():
+        payment = Payment(
+            tenant_id=tenant_id,
+            amount=Decimal("125.00"),
+            currency="USD",
+            method="cash",
+        )
+        db.session.add(payment)
+        db.session.commit()
+        payment_id = payment.id
+        cleanup_records["payments"].add(payment_id)
+        assert PaymentAllocation.query.filter_by(payment_id=payment_id).count() == 0
+
+    with app.test_client() as client:
+        response = client.post(
+            f"/api/payments/{payment_id}/allocations",
+            json={"allocations": [{"charge_id": charge_id, "amount": "25.00"}]},
+            headers=headers,
+        )
+
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "Only KES payments can be allocated."}
+    with app.app_context():
+        assert PaymentAllocation.query.filter_by(payment_id=payment_id).count() == 0
+
+
 def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_records):
     with app.app_context():
         landlord = create_landlord()
