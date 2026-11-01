@@ -1,8 +1,9 @@
 """Integration tests for landlord financial reporting."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
+from reports import BUSINESS_TIMEZONE
 
 import pytest
 from flask_jwt_extended import create_access_token
@@ -291,3 +292,226 @@ def test_financial_report_requires_landlord_and_hides_other_landlord_data(app, r
     assert response.get_json()["property_breakdown"] == []
     unauthenticated = app.test_client().get("/api/reports/financial?month=2025-05")
     assert unauthenticated.status_code == 401
+
+
+def _set_invoice_due_date(invoice, due_date):
+    invoice.due_date = due_date
+
+
+def test_arrears_report_shows_remaining_balance_for_partially_paid_invoice(
+    app, report_records):
+    with app.app_context():
+        today = datetime.now(BUSINESS_TIMEZONE).date()
+        landlord = _landlord("arrears_partial", report_records)
+        property_obj, tenant, lease = _lease(
+            landlord.id, "arrears_partial", report_records
+        )
+
+        invoice, charge = _invoice(
+            lease,
+            "rent",
+            "issued",
+            datetime.now(timezone.utc),
+            Decimal("15000.00"),
+            report_records,
+        )
+        _set_invoice_due_date(invoice, today - timedelta(days=10))
+
+        payment = Payment(
+            tenant_id=lease.tenant_id,
+            amount=Decimal("5000.00"),
+            currency="KES",
+            received_at = datetime.now(timezone.utc),
+            method="cash",
+        )
+        db.session.add(payment)
+        db.session.flush()
+        report_records["payments"].append(payment.id)
+
+        allocation = PaymentAllocation(
+            payment_id=payment.id,
+            charge_id=charge.id,
+            amount=Decimal("5000.00"),
+        )
+        db.session.add(allocation)
+        db.session.commit()
+        headers = _auth_header(landlord.id)
+
+    response = app.test_client().get("/api/reports/arrears", headers=headers)
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["summary"]["total_overdue"] == "10000.00"
+    assert data["summary"]["overdue_invoice_count"] == 1
+    assert data["summary"]["overdue_tenant_count"] == 1
+    assert data["invoices"][0]["outstanding_balance"] == "10000.00"
+    assert data["invoices"][0]["days_overdue"] == 10
+
+
+def test_arrears_report_excludes_fully_paid_draft_and_not_yet_due_invoices(
+    app, report_records
+):
+    with app.app_context():
+        today = datetime.now(BUSINESS_TIMEZONE).date()
+        landlord = _landlord("arrears_exclusions", report_records)
+        landlord_id = landlord.id
+
+        # Fully paid overdue invoice
+        _, _, paid_lease = _lease(
+            landlord.id, "arrears_fully_paid", report_records
+        )
+        paid_invoice, paid_charge = _invoice(
+            paid_lease,
+            "rent",
+            "issued",
+            datetime.now(timezone.utc),
+            Decimal("12000.00"),
+            report_records,
+        )
+        _set_invoice_due_date(paid_invoice, today - timedelta(days=5))
+
+        payment = Payment(
+            tenant_id=paid_lease.tenant_id,
+            amount=Decimal("12000.00"),
+            currency="KES",
+            method="cash",
+            received_at=datetime.now(timezone.utc),
+        )
+        db.session.add(payment)
+        db.session.flush()
+        report_records["payments"].append(payment.id)
+
+        db.session.add(
+            PaymentAllocation(
+                payment_id=payment.id,
+                charge_id=paid_charge.id,
+                amount=Decimal("12000.00"),
+            )
+        )
+
+        # Issued invoice due today
+        _, _, today_lease = _lease(
+            landlord.id, "arrears_due_today", report_records
+        )
+        today_invoice, _ = _invoice(
+            today_lease,
+            "rent",
+            "issued",
+            datetime.now(timezone.utc),
+            Decimal("8000.00"),
+            report_records,
+        )
+        _set_invoice_due_date(today_invoice, today)
+
+        # Draft invoice with an overdue due date
+        _, _, draft_lease = _lease(
+            landlord.id, "arrears_draft", report_records
+        )
+        draft_invoice, _ = _invoice(
+            draft_lease,
+            "rent",
+            "draft",
+            None,
+            Decimal("9000.00"),
+            report_records,
+        )
+        _set_invoice_due_date(draft_invoice, today - timedelta(days=10))
+
+        db.session.commit()
+        headers = _auth_header(landlord_id)
+
+    response = app.test_client().get(
+        "/api/reports/arrears",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["summary"]["total_overdue"] == "0.00"
+    assert data["summary"]["overdue_invoice_count"] == 0
+    assert data["summary"]["overdue_tenant_count"] == 0
+    assert data["invoices"] == []
+    assert data["tenants"] == []
+
+
+def test_arrears_report_enforces_landlord_isolation_and_property_filter(
+    app, report_records
+):
+    with app.app_context():
+        today = datetime.now(BUSINESS_TIMEZONE).date()
+        issued_at = datetime.now(timezone.utc)
+
+        landlord_one = _landlord("arrears_owner_one", report_records)
+        landlord_two = _landlord("arrears_owner_two", report_records)
+
+        property_one, _, lease_one = _lease(
+            landlord_one.id, "arrears_property_one", report_records
+        )
+        property_two, _, lease_two = _lease(
+            landlord_one.id, "arrears_property_two", report_records
+        )
+        _, _, foreign_lease = _lease(
+            landlord_two.id, "arrears_foreign_property", report_records
+        )
+
+        for lease, amount in (
+            (lease_one, Decimal("10000.00")),
+            (lease_two, Decimal("20000.00")),
+            (foreign_lease, Decimal("30000.00")),
+        ):
+            invoice, _ = _invoice(
+                lease,
+                "rent",
+                "issued",
+                issued_at,
+                amount,
+                report_records,
+            )
+            _set_invoice_due_date(invoice, today - timedelta(days=3))
+
+        db.session.commit()
+
+        client = app.test_client()
+
+        # Landlord one should see only their two properties.
+        response = client.get(
+            "/api/reports/arrears",
+            headers=_auth_header(landlord_one.id),
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data["summary"]["total_overdue"] == "30000.00"
+        assert data["summary"]["overdue_invoice_count"] == 2
+        assert {
+            invoice["property_id"] for invoice in data["invoices"]
+        } == {property_one.id, property_two.id}
+
+        # Filtering to property one should return only its invoice.
+        response = client.get(
+            f"/api/reports/arrears?property_id={property_one.id}",
+            headers=_auth_header(landlord_one.id),
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data["summary"]["total_overdue"] == "10000.00"
+        assert data["summary"]["overdue_invoice_count"] == 1
+        assert data["invoices"][0]["property_id"] == property_one.id
+
+        landlord_one_id = landlord_one.id
+        landlord_two_id = landlord_two.id
+
+        # Landlord two must not see landlord one's records.
+        response = client.get(
+            "/api/reports/arrears",
+            headers=_auth_header(landlord_two_id),
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data["summary"]["total_overdue"] == "30000.00"
+        assert data["summary"]["overdue_invoice_count"] == 1
+        assert data["invoices"][0]["property_id"] == foreign_lease.unit.property_id

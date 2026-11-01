@@ -5,7 +5,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import func, text
 
 from authorization import get_current_landlord_id
@@ -33,7 +33,13 @@ BUSINESS_TIMEZONE = ZoneInfo("Africa/Nairobi")
 def use_consistent_read_snapshot():
     # Reporting runs several aggregate queries. A repeatable, read-only
     # transaction keeps every metric on the same PostgreSQL snapshot.
-    db.session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+    # Some requests can leave an open transaction on the shared Flask-SQLAlchemy
+    # session, so reset it before setting the isolation level for this request.
+    session = db.session()
+    if session.in_transaction():
+        session.rollback()
+
+    session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
 
 
 def _parse_month(value):
@@ -450,4 +456,168 @@ def financial_report():
         },
         "collection_rates_percent": rates,
         "property_breakdown": property_breakdown,
+    }), 200
+
+
+@reports_bp.get("/arrears")
+@jwt_required()
+def arrears_report():
+    """Return overdue invoice balances for the authenticated landlord."""
+    landlord_id = get_jwt_identity()
+
+    try:
+        landlord_id = int(landlord_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid authenticated user."}), 401
+
+    raw_property_id = request.args.get("property_id")
+    property_id = None
+
+    if raw_property_id is not None:
+        try:
+            property_id = int(raw_property_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "property_id must be a positive integer."}), 400
+
+        if property_id <= 0:
+            return jsonify({"error": "property_id must be a positive integer."}), 400
+
+        owned_property = Property.query.filter_by(
+            id=property_id,
+            owner_id=landlord_id,
+        ).first()
+
+        if owned_property is None:
+            return jsonify({"error": "Property not found."}), 404
+
+    today = datetime.now(BUSINESS_TIMEZONE).date()
+    valid_allocations = _valid_allocation_totals(landlord_id, property_id)
+
+    rows = (
+        db.session.query(
+            Invoice.id.label("invoice_id"),
+            Invoice.period_start,
+            Invoice.period_end,
+            Invoice.due_date,
+            Invoice.purpose,
+            Tenant.id.label("tenant_id"),
+            Tenant.full_name.label("tenant_name"),
+            Property.id.label("property_id"),
+            Property.name.label("property_name"),
+            Unit.id.label("unit_id"),
+            Unit.unit_number,
+            Charge.id.label("charge_id"),
+            Charge.amount.label("charge_amount"),
+            func.coalesce(valid_allocations.c.paid, 0).label("paid_amount"),
+        )
+        .select_from(Invoice)
+        .join(Lease, Invoice.lease_id == Lease.id)
+        .join(Unit, Lease.unit_id == Unit.id)
+        .join(Property, Unit.property_id == Property.id)
+        .join(Tenant, Lease.tenant_id == Tenant.id)
+        .join(Charge, Charge.invoice_id == Invoice.id)
+        .outerjoin(valid_allocations, valid_allocations.c.charge_id == Charge.id)
+        .filter(
+            Property.owner_id == landlord_id,
+            Tenant.owner_id == landlord_id,
+            Invoice.status == "issued",
+            Invoice.due_date < today,
+        )
+    )
+
+    if property_id is not None:
+        rows = rows.filter(Property.id == property_id)
+
+    invoice_records = {}
+
+    for row in rows.order_by(Invoice.due_date, Tenant.full_name, Invoice.id).all():
+        invoice = invoice_records.setdefault(
+            row.invoice_id,
+            {
+                "invoice_id": row.invoice_id,
+                "tenant_id": row.tenant_id,
+                "tenant_name": row.tenant_name,
+                "property_id": row.property_id,
+                "property_name": row.property_name,
+                "unit_id": row.unit_id,
+                "unit_number": row.unit_number,
+                "purpose": row.purpose,
+                "period_start": row.period_start.isoformat(),
+                "period_end": row.period_end.isoformat(),
+                "due_date": row.due_date.isoformat(),
+                "days_overdue": (today - row.due_date).days,
+                "total_amount": ZERO,
+                "paid_amount": ZERO,
+                "outstanding_balance": ZERO,
+            },
+        )
+
+        charge_amount = Decimal(row.charge_amount or 0)
+        paid_amount = Decimal(row.paid_amount or 0)
+        invoice["total_amount"] += charge_amount
+        invoice["paid_amount"] += paid_amount
+        invoice["outstanding_balance"] += charge_amount - paid_amount
+
+    invoices = []
+    tenant_totals = {}
+
+    for invoice in invoice_records.values():
+        if invoice["outstanding_balance"] <= ZERO:
+            continue
+
+        for key in ("total_amount", "paid_amount", "outstanding_balance"):
+            invoice[key] = _money(invoice[key])
+
+        invoices.append(invoice)
+
+        tenant = tenant_totals.setdefault(
+            invoice["tenant_id"],
+            {
+                "tenant_id": invoice["tenant_id"],
+                "tenant_name": invoice["tenant_name"],
+                "invoice_count": 0,
+                "outstanding_balance": ZERO,
+                "oldest_due_date": invoice["due_date"],
+                "maximum_days_overdue": invoice["days_overdue"],
+            },
+        )
+
+        tenant["invoice_count"] += 1
+        tenant["outstanding_balance"] += Decimal(invoice["outstanding_balance"])
+        tenant["maximum_days_overdue"] = max(
+            tenant["maximum_days_overdue"],
+            invoice["days_overdue"],
+        )
+        tenant["oldest_due_date"] = min(
+            tenant["oldest_due_date"],
+            invoice["due_date"],
+        )
+
+    tenant_rows = []
+    for tenant in tenant_totals.values():
+        tenant["outstanding_balance"] = _money(tenant["outstanding_balance"])
+        tenant_rows.append(tenant)
+
+    tenant_rows.sort(
+        key=lambda tenant: Decimal(tenant["outstanding_balance"]),
+        reverse=True,
+    )
+
+    total_overdue = sum(
+        (Decimal(invoice["outstanding_balance"]) for invoice in invoices),
+        ZERO,
+    )
+
+    return jsonify({
+        "as_of_date": today.isoformat(),
+        "timezone": "Africa/Nairobi",
+        "currency": "KES",
+        "property_id": property_id,
+        "summary": {
+            "total_overdue": _money(total_overdue),
+            "overdue_invoice_count": len(invoices),
+            "overdue_tenant_count": len(tenant_rows),
+        },
+        "tenants": tenant_rows,
+        "invoices": invoices,
     }), 200

@@ -141,6 +141,7 @@ function LoginScreen() {
 const navigationItems = [
   { label: 'Overview', available: true },
   { label: 'Financial Overview', available: true },
+  { label: 'Arrears', available: true },
   { label: 'Properties', available: true },
   { label: 'Tenants', available: true },
   { label: 'Leases', available: true },
@@ -2399,6 +2400,281 @@ function FinancialOverviewPage() {
   )
 }
 
+function ArrearsPage() {
+  const [propertyId, setPropertyId] = useState('')
+  const [reportState, setReportState] = useState({
+    loading: true,
+    properties: [],
+    report: null,
+    error: '',
+  })
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function loadArrears() {
+      setReportState((current) => ({
+        ...current,
+        loading: true,
+        error: '',
+      }))
+
+      try {
+        const params = new URLSearchParams()
+        if (propertyId) params.set('property_id', propertyId)
+
+        const [propertyResult, report] = await Promise.all([
+          apiRequest('/api/properties', { authenticated: true }),
+          apiRequest(`/api/reports/arrears?${params.toString()}`, {
+            authenticated: true,
+          }),
+        ])
+
+        if (
+          !Array.isArray(propertyResult?.properties) ||
+          !report?.summary ||
+          !Array.isArray(report.tenants) ||
+          !Array.isArray(report.invoices)
+        ) {
+          throw new Error('Arrears data could not be read. Please try again.')
+        }
+
+        if (isCurrent) {
+          setReportState({
+            loading: false,
+            properties: propertyResult.properties,
+            report,
+            error: '',
+          })
+        }
+      } catch (error) {
+        if (isCurrent) {
+          setReportState((current) => ({
+            ...current,
+            loading: false,
+            error: error.message || 'Unable to load arrears data.',
+          }))
+        }
+      }
+    }
+
+    loadArrears()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [propertyId, retryCount])
+
+  const { report } = reportState
+
+  function displayDate(value) {
+    if (!value) return '—'
+
+    return new Date(`${value}T00:00:00`).toLocaleDateString('en-KE', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    })
+  }
+
+  return (
+    <section
+      className="management-page financial-overview-page arrears-page"
+      aria-labelledby="arrears-heading"
+    >
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Portfolio reporting</p>
+          <h2 id="arrears-heading">Overdue Rent & Arrears</h2>
+          <p>
+            Track unpaid balances on issued invoices that are past their due
+            dates.
+          </p>
+        </div>
+      </div>
+
+      <div className="financial-report-filters">
+        <div className="field-group">
+          <label htmlFor="arrears-property">Property</label>
+          <select
+            id="arrears-property"
+            value={propertyId}
+            disabled={reportState.loading}
+            onChange={(event) => setPropertyId(event.target.value)}
+          >
+            <option value="">All properties</option>
+            {reportState.properties.map((property) => (
+              <option key={property.id} value={property.id}>
+                {property.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {report && (
+          <p className="report-timezone">
+            Calculated as of {displayDate(report.as_of_date)} · {report.timezone}
+          </p>
+        )}
+      </div>
+
+      {reportState.loading ? (
+        <div className="overview-message" role="status" aria-live="polite">
+          <span className="loading-dot" aria-hidden="true" />
+          Loading arrears report…
+        </div>
+      ) : reportState.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div>
+            <h4>Arrears report could not be loaded</h4>
+            <p>{reportState.error}</p>
+          </div>
+          <button
+            className="retry-button"
+            type="button"
+            onClick={() => setRetryCount((count) => count + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <>
+          <section className="report-section" aria-labelledby="arrears-summary-heading">
+            <div className="report-section-heading">
+              <div>
+                <h3 id="arrears-summary-heading">Arrears summary</h3>
+                <p>
+                  Only issued invoices with a positive outstanding balance
+                  past their due date are included.
+                </p>
+              </div>
+            </div>
+
+            <div className="report-metric-grid">
+              <article className="report-metric report-metric-emphasis">
+                <span>Total overdue</span>
+                <strong>{formatKes(report.summary.total_overdue)}</strong>
+              </article>
+              <article className="report-metric">
+                <span>Overdue tenants</span>
+                <strong>{report.summary.overdue_tenant_count}</strong>
+              </article>
+              <article className="report-metric">
+                <span>Overdue invoices</span>
+                <strong>{report.summary.overdue_invoice_count}</strong>
+              </article>
+            </div>
+          </section>
+
+          {report.invoices.length === 0 ? (
+            <div className="overview-empty">
+              <h4>No overdue balances</h4>
+              <p>
+                There are currently no issued invoices past their due dates
+                with an outstanding balance for this selection.
+              </p>
+            </div>
+          ) : (
+            <>
+              <section className="report-section" aria-labelledby="arrears-tenants-heading">
+                <div className="report-section-heading">
+                  <div>
+                    <h3 id="arrears-tenants-heading">Arrears by tenant</h3>
+                    <p>
+                      Outstanding balances grouped by tenant, including the
+                      oldest overdue invoice.
+                    </p>
+                  </div>
+                </div>
+
+                <ul className="report-property-list">
+                  {report.tenants.map((tenant) => (
+                    <li className="report-property-card" key={tenant.tenant_id}>
+                      <div className="report-property-heading">
+                        <h4>{tenant.tenant_name}</h4>
+                        <span>
+                          {formatKes(tenant.outstanding_balance)} overdue
+                        </span>
+                      </div>
+                      <div className="report-property-metrics">
+                        <span>
+                          Overdue invoices
+                          <strong>{tenant.invoice_count}</strong>
+                        </span>
+                        <span>
+                          Oldest due date
+                          <strong>{displayDate(tenant.oldest_due_date)}</strong>
+                        </span>
+                        <span>
+                          Maximum days overdue
+                          <strong>{tenant.maximum_days_overdue} days</strong>
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="report-section" aria-labelledby="arrears-invoices-heading">
+                <div className="report-section-heading">
+                  <div>
+                    <h3 id="arrears-invoices-heading">Overdue invoices</h3>
+                    <p>
+                      Remaining balances after recorded payment allocations.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="report-table-wrap">
+                  <table className="report-rate-table arrears-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Tenant / Unit</th>
+                        <th scope="col">Property</th>
+                        <th scope="col">Purpose</th>
+                        <th scope="col">Due date</th>
+                        <th scope="col">Days overdue</th>
+                        <th scope="col">Invoice total</th>
+                        <th scope="col">Paid</th>
+                        <th scope="col">Outstanding</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.invoices.map((invoice) => (
+                        <tr key={invoice.invoice_id}>
+                          <td>
+                            <strong>{invoice.tenant_name}</strong>
+                            <small>Unit {invoice.unit_number}</small>
+                          </td>
+                          <td>{invoice.property_name}</td>
+                          <td>
+                            {invoice.purpose.charAt(0).toUpperCase() +
+                              invoice.purpose.slice(1)}
+                          </td>
+                          <td>{displayDate(invoice.due_date)}</td>
+                          <td>{invoice.days_overdue} days</td>
+                          <td>{formatKes(invoice.total_amount)}</td>
+                          <td>{formatKes(invoice.paid_amount)}</td>
+                          <td>
+                            <strong>
+                              {formatKes(invoice.outstanding_balance)}
+                            </strong>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2514,6 +2790,8 @@ function DashboardShell({ user }) {
             </>
           ) : page === 'Financial Overview' ? (
             <FinancialOverviewPage />
+          ) : page === 'Arrears' ? (
+            <ArrearsPage />
           ) : page === 'Properties' ? (
             <PropertiesPage onDataChanged={() => setDataVersion((version) => version + 1)} />
           ) : page === 'Tenants' ? (
