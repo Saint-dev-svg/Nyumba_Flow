@@ -6,7 +6,16 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from extensions import db
-from models import Charge, Invoice, Lease, Property, Tenant, Unit, UtilityBreakdown
+from billing_settings import get_or_create_landlord_billing_settings
+from models import (
+    Charge,
+    Invoice,
+    Lease,
+    Property,
+    Tenant,
+    Unit,
+    UtilityBreakdown,
+)
 from authorization import get_current_landlord_id
 
 
@@ -24,6 +33,21 @@ def _parse_date(value, field_name):
         return None, f"{field_name} must be a date in YYYY-MM-DD format."
     return parsed, None
 
+def _get_invoice_due_date(landlord_id, period_start, purpose):
+    settings = get_or_create_landlord_billing_settings(landlord_id)
+
+    if purpose == "rent":
+        due_day = settings.rent_due_day
+    elif purpose == "utilities":
+        due_day = settings.utilities_due_day
+    else:
+        return period_start
+
+    return date(
+        period_start.year,
+        period_start.month,
+        due_day,
+    )
 
 def _parse_amount(value, field_name):
     if value is None or isinstance(value, bool):
@@ -213,9 +237,6 @@ def create_invoice():
     period_end, error = _parse_date(data.get("period_end"), "period_end")
     if error:
         return jsonify({"error": error}), 400
-    due_date, error = _parse_date(data.get("due_date"), "due_date")
-    if error:
-        return jsonify({"error": error}), 400
     if period_end < period_start:
         return jsonify({"error": "period_end cannot be before period_start."}), 400
 
@@ -223,6 +244,8 @@ def create_invoice():
     if not isinstance(purpose, str) or purpose not in {"rent", "utilities", "other"}:
         return jsonify({"error": "purpose must be rent, utilities, or other."}), 400
 
+    due_date = _get_invoice_due_date(landlord_id, period_start, purpose)
+    
     charges, error = _parse_charges(data.get("charges"))
     if error:
         return jsonify({"error": error}), 400

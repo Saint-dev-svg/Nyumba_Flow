@@ -36,8 +36,55 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
     
-    
-    
+class LandlordBillingSettings(db.Model):
+    """Billing due-day preferences for one landlord."""
+
+    __tablename__ = "landlord_billing_settings"
+
+    landlord_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    rent_due_day = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+    )
+
+    utilities_due_day = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+    )
+
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    landlord = db.relationship("User")
+
+    __table_args__ = (
+        CheckConstraint(
+            "rent_due_day BETWEEN 1 AND 28",
+            name="ck_billing_settings_rent_due_day",
+        ),
+        CheckConstraint(
+            "utilities_due_day BETWEEN 1 AND 28",
+            name="ck_billing_settings_utilities_due_day",
+        ),
+    )
+
 class Property(db.Model):
     __tablename__ = "properties"
     

@@ -15,6 +15,7 @@ from models import (
     Invoice,
     Lease,
     PaymentAllocation,
+    LandlordBillingSettings,
     Property,
     PropertyUtilitySettings,
     Tenant,
@@ -73,6 +74,12 @@ def cleanup_records(app):
             )
         if records["tenants"]:
             Tenant.query.filter(Tenant.id.in_(records["tenants"])).delete(synchronize_session=False)
+       
+        if records["users"]:
+            LandlordBillingSettings.query.filter(
+                LandlordBillingSettings.landlord_id.in_(records["users"])
+            ).delete(synchronize_session=False)     
+        
         if records["users"]:
             User.query.filter(User.id.in_(records["users"])).delete(synchronize_session=False)
         db.session.commit()
@@ -304,12 +311,14 @@ def test_generation_uses_exact_february_period_decimal_water_and_garbage_fee(app
     body = response.get_json()
     assert body["period_start"] == "2028-02-01"
     assert body["period_end"] == "2028-02-29"
-    assert body["due_date"] == "2028-02-01"
+    assert body["rent_due_date"] == "2028-02-01"
+    assert body["utilities_due_date"] == "2028-02-01"
     with app.app_context():
         invoices = {item.purpose: item for item in Invoice.query.filter_by(lease_id=lease_id).all()}
         assert invoices["rent"].period_start == date(2028, 2, 1)
         assert invoices["rent"].period_end == date(2028, 2, 29)
         assert invoices["rent"].due_date == date(2028, 2, 1)
+        assert invoices["utilities"].due_date == date(2028, 2, 1)
         assert invoices["rent"].status == invoices["utilities"].status == "draft"
         rent_charge = invoices["rent"].charges[0]
         utilities_charge = invoices["utilities"].charges[0]
@@ -319,6 +328,89 @@ def test_generation_uses_exact_february_period_decimal_water_and_garbage_fee(app
         assert breakdowns == {"water": Decimal("453.13"), "garbage": Decimal("325.00")}
         assert sum(breakdowns.values()) == Decimal(utilities_charge.amount)
 
+def test_generation_uses_custom_landlord_due_days_and_preserves_existing_dates(
+    app, cleanup_records
+):
+    with app.app_context():
+        landlord_id, property_id, _, unit_id, lease_id = create_setup(
+            cleanup_records
+        )
+
+        settings = LandlordBillingSettings(
+            landlord_id=landlord_id,
+            rent_due_day=5,
+            utilities_due_day=12,
+        )
+        db.session.add(settings)
+        db.session.commit()
+
+        headers = headers_for(landlord_id)
+
+    with app.test_client() as client:
+        save_reading(
+            client,
+            headers,
+            property_id,
+            unit_id,
+            month="2028-02",
+            previous="10.000",
+            current="12.500",
+        )
+
+        first_response = client.post(
+            "/api/invoices/generate-monthly",
+            json={"billing_month": "2028-02"},
+            headers=headers,
+        )
+
+        assert first_response.status_code == 200
+
+        first_body = first_response.get_json()
+        assert first_body["rent_due_date"] == "2028-02-05"
+        assert first_body["utilities_due_date"] == "2028-02-12"
+
+    with app.app_context():
+        invoices = {
+            item.purpose: item
+            for item in Invoice.query.filter_by(lease_id=lease_id).all()
+        }
+
+        assert invoices["rent"].due_date == date(2028, 2, 5)
+        assert invoices["utilities"].due_date == date(2028, 2, 12)
+
+        original_rent_id = invoices["rent"].id
+        original_utilities_id = invoices["utilities"].id
+
+        settings = db.session.get(LandlordBillingSettings, landlord_id)
+        settings.rent_due_day = 8
+        settings.utilities_due_day = 20
+        db.session.commit()
+
+    with app.test_client() as client:
+        second_response = client.post(
+            "/api/invoices/generate-monthly",
+            json={"billing_month": "2028-02"},
+            headers=headers,
+        )
+
+    assert second_response.status_code == 200
+
+    with app.app_context():
+        invoices = {
+            item.purpose: item
+            for item in Invoice.query.filter_by(lease_id=lease_id).all()
+        }
+
+        assert invoices["rent"].id == original_rent_id
+        assert invoices["utilities"].id == original_utilities_id
+        assert invoices["rent"].due_date == date(2028, 2, 5)
+        assert invoices["utilities"].due_date == date(2028, 2, 12)
+
+        utilities_charge = invoices["utilities"].charges[0]
+        breakdowns = {
+            item.category for item in utilities_charge.utility_breakdowns
+        }
+        assert breakdowns == {"water", "garbage"}
 
 def test_non_leap_february_uses_twenty_eight_calendar_days(app, cleanup_records):
     with app.app_context():

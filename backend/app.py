@@ -15,6 +15,7 @@ from properties import properties_bp
 from reports import reports_bp
 from tenants import tenants_bp
 from units import units_bp
+from billing_settings import billing_settings_bp
 from utility_billing import utility_billing_bp
 
 load_dotenv()
@@ -57,6 +58,7 @@ def create_app(test_config=None):
     app.register_blueprint(tenants_bp)
     app.register_blueprint(units_bp)
     app.register_blueprint(utility_billing_bp)
+    app.register_blueprint(billing_settings_bp)
     @app.get("/api/health")
     def health_check():
         return jsonify({

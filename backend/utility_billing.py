@@ -17,6 +17,7 @@ from models import (
     Lease,
     Property,
     PropertyUtilitySettings,
+    LandlordBillingSettings,
     Tenant,
     Unit,
     UtilityBreakdown,
@@ -287,7 +288,30 @@ def generate_monthly_drafts():
     start, end, error = _period_from_month(data.get("billing_month"))
     if error:
         return jsonify({"error": error}), 400
-    due_date = start
+    billing_settings = LandlordBillingSettings.query.filter_by(
+        landlord_id=landlord_id
+    ).first()
+
+    if billing_settings is None:
+        billing_settings = LandlordBillingSettings(
+            landlord_id=landlord_id,
+            rent_due_day=1,
+            utilities_due_day=1,
+        )
+        db.session.add(billing_settings)
+        db.session.flush()
+
+    rent_due_date = date(
+        start.year,
+        start.month,
+        billing_settings.rent_due_day,
+    )
+
+    utilities_due_date = date(
+        start.year,
+        start.month,
+        billing_settings.utilities_due_day,
+    )    
     created = []
     existing = []
     needs_readings = []
@@ -402,7 +426,7 @@ def generate_monthly_drafts():
                 lease_id=lease.id,
                 period_start=start,
                 period_end=end,
-                due_date=due_date,
+                due_date=rent_due_date,
                 purpose="rent",
             )
             rent_invoice.charges.append(Charge(
@@ -425,7 +449,7 @@ def generate_monthly_drafts():
                 lease_id=lease.id,
                 period_start=start,
                 period_end=end,
-                due_date=due_date,
+                due_date=utilities_due_date,
                 purpose="utilities",
             )
             utility_invoice.charges.append(utility_charge)
@@ -472,7 +496,8 @@ def generate_monthly_drafts():
         "billing_month": data["billing_month"],
         "period_start": start.isoformat(),
         "period_end": end.isoformat(),
-        "due_date": due_date.isoformat(),
+        "rent_due_date": rent_due_date.isoformat(),
+        "utilities_due_date": utilities_due_date.isoformat(),
         "created_invoices": created,
         "already_existing": existing,
         "needs_readings": needs_readings,

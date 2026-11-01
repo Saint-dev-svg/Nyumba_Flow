@@ -14,6 +14,7 @@ from extensions import db
 from models import (
     Charge,
     Invoice,
+    LandlordBillingSettings,
     Lease,
     Property,
     Tenant,
@@ -149,7 +150,6 @@ def invoice_payload(
         "purpose": purpose,
         "period_start": period_start,
         "period_end": period_end,
-        "due_date": "2026-10-05",
         "charges": charges or [
             {
                 "category": "rent",
@@ -189,6 +189,141 @@ def test_create_invoice_with_charges_for_active_owned_lease(app, cleanup_records
     assert len(invoice_data["charges"]) == 1
     assert invoice_data["charges"][0]["category"] == "rent"
     assert invoice_data["charges"][0]["amount"] == "15000.00"
+    cleanup_records["invoices"].add(invoice_data["id"])
+
+
+def test_rent_invoice_uses_landlord_rent_due_day(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+
+        db.session.add(LandlordBillingSettings(
+            landlord_id=landlord.id,
+            rent_due_day=5,
+            utilities_due_day=12,
+        ))
+        db.session.commit()
+
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        response = create_invoice(client, headers, lease_id)
+
+    assert response.status_code == 201
+    invoice_data = response.get_json()["invoice"]
+    assert invoice_data["due_date"] == "2026-10-05"
+    cleanup_records["invoices"].add(invoice_data["id"])
+
+
+def test_utilities_invoice_uses_landlord_utilities_due_day(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+
+        db.session.add(LandlordBillingSettings(
+            landlord_id=landlord.id,
+            rent_due_day=5,
+            utilities_due_day=12,
+        ))
+        db.session.commit()
+
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/invoices",
+            json=invoice_payload(
+                lease_id,
+                purpose="utilities",
+                charges=[{
+                    "category": "utilities",
+                    "amount": "700.00",
+                    "utility_breakdowns": [
+                        {"category": "water", "amount": "450.00"},
+                        {"category": "garbage", "amount": "250.00"},
+                    ],
+                }],
+            ),
+            headers=headers,
+        )
+
+    assert response.status_code == 201
+    invoice_data = response.get_json()["invoice"]
+    assert invoice_data["due_date"] == "2026-10-12"
+    assert invoice_data["purpose"] == "utilities"
+    cleanup_records["invoices"].add(invoice_data["id"])
+
+
+def test_other_invoice_uses_first_day_of_billing_period(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+
+        db.session.add(LandlordBillingSettings(
+            landlord_id=landlord.id,
+            rent_due_day=5,
+            utilities_due_day=12,
+        ))
+        db.session.commit()
+
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/invoices",
+            json=invoice_payload(
+                lease_id,
+                purpose="other",
+                charges=[{
+                    "category": "other",
+                    "amount": "500.00",
+                    "description": "Additional charge",
+                }],
+            ),
+            headers=headers,
+        )
+
+    assert response.status_code == 201
+    invoice_data = response.get_json()["invoice"]
+    assert invoice_data["due_date"] == "2026-10-01"
+    cleanup_records["invoices"].add(invoice_data["id"])
+
+
+def test_client_cannot_override_invoice_due_date(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+
+        db.session.add(LandlordBillingSettings(
+            landlord_id=landlord.id,
+            rent_due_day=5,
+            utilities_due_day=12,
+        ))
+        db.session.commit()
+
+        lease_id = lease.id
+        headers = auth_headers(landlord.id)
+
+    payload = invoice_payload(lease_id)
+    payload["due_date"] = "2026-10-25"
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/invoices",
+            json=payload,
+            headers=headers,
+        )
+
+    assert response.status_code == 201
+    invoice_data = response.get_json()["invoice"]
+    assert invoice_data["due_date"] == "2026-10-05"
     cleanup_records["invoices"].add(invoice_data["id"])
 
 
@@ -342,6 +477,8 @@ def test_concurrent_same_purpose_invoice_creation_is_rejected_by_database(
         record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
         lease_id = lease.id
         headers = auth_headers(landlord.id)
+        db.session.add(LandlordBillingSettings(landlord_id=landlord.id))
+        db.session.commit()
 
     barrier = Barrier(2)
 
