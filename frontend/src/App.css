@@ -1891,6 +1891,17 @@ button.nav-item {
   }
 }
 
+.invoice-filters {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.invoice-filters .field-group {
+  width: min(100%, 240px);
+  margin: 0;
+}
+
 .invoice-list {
   display: grid;
   gap: 10px;
@@ -1978,7 +1989,26 @@ button.nav-item {
   color: var(--color-accent-hover);
 }
 
+.invoice-lifecycle.status-partially_paid {
+  border-color: #d7e1e4;
+  background: #f3f7f8;
+  color: #536b74;
+}
+
+.invoice-lifecycle.status-paid {
+  border-color: #cbdcca;
+  background: #eef5ed;
+  color: #3f6948;
+}
+
+.invoice-lifecycle.status-overdue {
+  border-color: #ead2d0;
+  background: #fbf2f1;
+  color: #96534c;
+}
+
 .invoice-lifecycle.status-void {
+  border-color: #e0e2de;
   background: #f3f4f1;
   color: #727a73;
 }

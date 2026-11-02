@@ -1817,7 +1817,43 @@ function invoicePaymentProgress(invoice) {
 }
 
 function invoiceChargeLabel(category) {
+  if (typeof category !== 'string' || !category.trim()) return 'Unknown'
   return category.charAt(0).toUpperCase() + category.slice(1)
+}
+
+function invoiceDisplayStatus(invoice) {
+  if (typeof invoice?.display_status === 'string' && invoice.display_status.trim()) {
+    return invoice.display_status
+  }
+  const lifecycleStatus = typeof invoice?.status === 'string' ? invoice.status : ''
+  if (lifecycleStatus !== 'issued') {
+    return lifecycleStatus || 'unknown'
+  }
+
+  const outstanding = moneyToCents(invoice.outstanding_balance)
+  if (outstanding !== null && outstanding <= 0n) return 'paid'
+
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const businessDate = dateParts
+    .filter((part) => part.type !== 'literal')
+    .map((part) => part.value)
+    .join('-')
+  if (typeof invoice.due_date === 'string' && invoice.due_date < businessDate) {
+    return 'overdue'
+  }
+
+  const paid = moneyToCents(invoice.paid_amount)
+  return paid !== null && paid > 0n ? 'partially_paid' : 'issued'
+}
+
+function invoiceStatusLabel(status) {
+  if (status === 'partially_paid') return 'Partially Paid'
+  return invoiceChargeLabel(status)
 }
 
 function InvoiceForm({ leases, tenants, properties, units, invoices, onCancel, onCreated }) {
@@ -2353,6 +2389,7 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
   const [invoiceDetails, setInvoiceDetails] = useState({ loading: false, invoice: null, error: '' })
   const [detailRetry, setDetailRetry] = useState(0)
   const [issueState, setIssueState] = useState({ busy: false, error: '' })
+  const [statusFilter, setStatusFilter] = useState('all')
 
   useEffect(() => {
     if (selectedInvoiceId === null) return undefined
@@ -2396,6 +2433,10 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
   const selectedTenant = selectedLease ? tenantById.get(selectedLease.tenant_id) : null
   const selectedUnit = selectedLease ? unitById.get(selectedLease.unit_id) : null
   const selectedProperty = selectedUnit ? propertyById.get(selectedUnit.property_id) : null
+  const purposeInvoices = data.invoices.filter((invoice) => invoice.purpose === purpose)
+  const filteredInvoices = purposeInvoices.filter((invoice) => (
+    statusFilter === 'all' || invoiceDisplayStatus(invoice) === statusFilter
+  ))
 
   if (selectedInvoiceId !== null) {
     return (
@@ -2418,7 +2459,7 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
                 <h2 id="invoice-detail-heading">{selectedTenant?.full_name || 'Tenant unavailable'}</h2>
                 <p>{selectedProperty?.name || 'Property unavailable'}{selectedUnit ? ` · Unit ${selectedUnit.unit_number}` : ''}</p>
               </div>
-              <span className={`status-pill invoice-lifecycle status-${selectedInvoice.status}`}>{invoiceChargeLabel(selectedInvoice.status)}</span>
+              <span className={`status-pill invoice-lifecycle status-${invoiceDisplayStatus(selectedInvoice)}`}>{invoiceStatusLabel(invoiceDisplayStatus(selectedInvoice))}</span>
             </div>
             <div className="invoice-meta-grid">
               <div><span>Billing period</span><strong>{selectedInvoice.period_start} – {selectedInvoice.period_end}</strong></div>
@@ -2487,14 +2528,39 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
           <div><h4>Invoice information could not be loaded</h4><p>{data.error}</p></div>
           <button className="retry-button" type="button" onClick={retry}>Try again</button>
         </div>
-      ) : data.invoices.filter((invoice) => invoice.purpose === purpose).length === 0 ? (
+      ) : purposeInvoices.length === 0 ? (
         <div className="overview-empty compact-empty">
           <h4>No {invoiceChargeLabel(purpose)} invoices yet</h4>
           <p>{purpose === 'rent' ? 'Rent invoices created through Monthly Billing or manual invoice creation will appear here.' : purpose === 'utilities' ? 'Utilities invoices created through Monthly Billing or manual invoice creation will appear here.' : 'Other invoices created through manual invoice creation will appear here.'}</p>
         </div>
       ) : (
+        <>
+          <div className="invoice-filters">
+            <div className="field-group">
+              <label htmlFor="invoice-status-filter">Invoice status</label>
+              <select
+                id="invoice-status-filter"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+              >
+                <option value="all">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="issued">Issued</option>
+                <option value="partially_paid">Partially Paid</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+                <option value="void">Void</option>
+              </select>
+            </div>
+          </div>
+          {filteredInvoices.length === 0 ? (
+            <div className="overview-empty compact-empty">
+              <h4>No matching {invoiceChargeLabel(purpose).toLowerCase()} invoices</h4>
+              <p>Try selecting a different invoice status.</p>
+            </div>
+          ) : (
         <ul className="invoice-list">
-          {data.invoices.filter((invoice) => invoice.purpose === purpose).map((invoice) => {
+          {filteredInvoices.map((invoice) => {
             const lease = leaseById.get(invoice.lease_id)
             const tenant = lease ? tenantById.get(lease.tenant_id) : null
             const unit = lease ? unitById.get(lease.unit_id) : null
@@ -2507,14 +2573,16 @@ function InvoicesPage({ purpose, selectedInvoiceId, setSelectedInvoiceId }) {
                     <span>{property?.name || 'Property unavailable'}{unit ? ` · Unit ${unit.unit_number}` : ''}</span>
                     <small>{invoice.period_start} – {invoice.period_end} · Due {invoice.due_date}</small>
                   </span>
-                  <span className="invoice-list-total"><strong>{formatKes(invoice.total_amount)}</strong><small>{invoiceChargeLabel(invoice.purpose)} · {invoiceChargeLabel(invoice.status)}</small></span>
+                  <span className="invoice-list-total"><strong>{formatKes(invoice.total_amount)}</strong><small>{invoiceChargeLabel(invoice.purpose)} · {invoiceStatusLabel(invoiceDisplayStatus(invoice))}</small></span>
                   <span className="invoice-list-balance"><span>Paid {formatKes(invoice.paid_amount)}</span><span>Outstanding {formatKes(invoice.outstanding_balance)}</span><small>{invoicePaymentProgress(invoice)}</small></span>
-                  <span className={`status-pill invoice-lifecycle status-${invoice.status}`}>{invoiceChargeLabel(invoice.status)}</span>
+                  <span className={`status-pill invoice-lifecycle status-${invoiceDisplayStatus(invoice)}`}>{invoiceStatusLabel(invoiceDisplayStatus(invoice))}</span>
                 </button>
               </li>
             )
           })}
         </ul>
+          )}
+        </>
       )}
     </section>
   )

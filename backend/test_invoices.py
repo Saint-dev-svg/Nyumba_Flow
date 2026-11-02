@@ -1,9 +1,10 @@
 """API contract tests for invoice and charge management."""
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from threading import Barrier
 from concurrent.futures import ThreadPoolExecutor
+from zoneinfo import ZoneInfo
 
 import pytest
 from flask_jwt_extended import create_access_token
@@ -16,7 +17,10 @@ from models import (
     Invoice,
     LandlordBillingSettings,
     Lease,
+    Payment,
+    PaymentAllocation,
     Property,
+    Receipt,
     Tenant,
     Unit,
     User,
@@ -39,10 +43,21 @@ def cleanup_records(app):
         "units": set(),
         "leases": set(),
         "invoices": set(),
+        "payments": set(),
     }
     yield records
 
     with app.app_context():
+        if records["payments"]:
+            PaymentAllocation.query.filter(
+                PaymentAllocation.payment_id.in_(records["payments"])
+            ).delete(synchronize_session=False)
+            Receipt.query.filter(
+                Receipt.payment_id.in_(records["payments"])
+            ).delete(synchronize_session=False)
+            Payment.query.filter(
+                Payment.id.in_(records["payments"])
+            ).delete(synchronize_session=False)
         if records["invoices"]:
             charge_ids = db.session.query(Charge.id).filter(
                 Charge.invoice_id.in_(records["invoices"])
@@ -667,6 +682,158 @@ def test_landlord_can_retrieve_their_own_invoice(app, cleanup_records):
     assert body["lease_id"] == lease_id
     assert body["status"] == "draft"
     assert len(body["charges"]) == 1
+
+
+def test_invoice_display_status_tracks_lifecycle_balance_and_due_date(
+    app, cleanup_records
+):
+    with app.app_context():
+        landlord = create_landlord()
+        property_obj, unit, tenant, lease = create_active_lease(landlord.id)
+        record_setup(cleanup_records, landlord, property_obj, unit, tenant, lease)
+        lease_id = lease.id
+        tenant_id = tenant.id
+        headers = auth_headers(landlord.id)
+        business_date = datetime.now(ZoneInfo("Africa/Nairobi")).date()
+
+    with app.test_client() as client:
+        created = create_invoice(client, headers, lease_id)
+        assert created.status_code == 201
+        invoice = created.get_json()["invoice"]
+        invoice_id = invoice["id"]
+        charge_id = invoice["charges"][0]["id"]
+        cleanup_records["invoices"].add(invoice_id)
+
+        assert invoice["status"] == "draft"
+        assert invoice["display_status"] == "draft"
+
+        with app.app_context():
+            db_invoice = db.session.get(Invoice, invoice_id)
+            db_invoice.status = "void"
+            db_invoice.due_date = business_date - timedelta(days=1)
+            db.session.commit()
+
+        void_detail = client.get(
+            f"/api/invoices/{invoice_id}", headers=headers
+        ).get_json()["invoice"]
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        assert void_detail["status"] == "void"
+        assert void_detail["display_status"] == "void"
+        assert (
+            next(row for row in listed if row["id"] == invoice_id)["display_status"]
+            == "void"
+        )
+
+        with app.app_context():
+            db_invoice = db.session.get(Invoice, invoice_id)
+            db_invoice.status = "draft"
+            db_invoice.due_date = business_date + timedelta(days=1)
+            db.session.commit()
+
+        draft_detail = client.get(
+            f"/api/invoices/{invoice_id}", headers=headers
+        ).get_json()["invoice"]
+        assert draft_detail["display_status"] == "draft"
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        assert (
+            next(row for row in listed if row["id"] == invoice_id)["display_status"]
+            == "draft"
+        )
+
+        issued = client.post(
+            f"/api/invoices/{invoice_id}/issue", headers=headers
+        )
+        assert issued.status_code == 200
+        assert issued.get_json()["invoice"]["display_status"] == "issued"
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        assert (
+            next(row for row in listed if row["id"] == invoice_id)["display_status"]
+            == "issued"
+        )
+
+        partial_payment_response = client.post(
+            "/api/payments",
+            json={
+                "tenant_id": tenant_id,
+                "amount": "5000.00",
+                "method": "cash",
+            },
+            headers=headers,
+        )
+        assert partial_payment_response.status_code == 201
+        partial_payment = partial_payment_response.get_json()["payment"]
+        cleanup_records["payments"].add(partial_payment["id"])
+        partial_allocation = client.post(
+            f"/api/payments/{partial_payment['id']}/allocations",
+            json={
+                "allocations": [
+                    {"charge_id": charge_id, "amount": "5000.00"}
+                ]
+            },
+            headers=headers,
+        )
+        assert partial_allocation.status_code == 200
+
+        partially_paid = client.get(
+            f"/api/invoices/{invoice_id}", headers=headers
+        ).get_json()["invoice"]
+        assert partially_paid["paid_amount"] == "5000.00"
+        assert partially_paid["display_status"] == "partially_paid"
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        assert (
+            next(row for row in listed if row["id"] == invoice_id)["display_status"]
+            == "partially_paid"
+        )
+
+        with app.app_context():
+            db_invoice = db.session.get(Invoice, invoice_id)
+            db_invoice.due_date = business_date - timedelta(days=1)
+            db.session.commit()
+
+        overdue = client.get(
+            f"/api/invoices/{invoice_id}", headers=headers
+        ).get_json()["invoice"]
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        assert overdue["display_status"] == "overdue"
+        assert (
+            next(row for row in listed if row["id"] == invoice_id)["display_status"]
+            == "overdue"
+        )
+
+        remaining_payment_response = client.post(
+            "/api/payments",
+            json={
+                "tenant_id": tenant_id,
+                "amount": "10000.00",
+                "method": "cash",
+            },
+            headers=headers,
+        )
+        assert remaining_payment_response.status_code == 201
+        remaining_payment = remaining_payment_response.get_json()["payment"]
+        cleanup_records["payments"].add(remaining_payment["id"])
+        full_allocation = client.post(
+            f"/api/payments/{remaining_payment['id']}/allocations",
+            json={
+                "allocations": [
+                    {"charge_id": charge_id, "amount": "10000.00"}
+                ]
+            },
+            headers=headers,
+        )
+        assert full_allocation.status_code == 200
+
+        paid = client.get(
+            f"/api/invoices/{invoice_id}", headers=headers
+        ).get_json()["invoice"]
+        listed = client.get("/api/invoices", headers=headers).get_json()["invoices"]
+        listed_paid = next(row for row in listed if row["id"] == invoice_id)
+
+    assert paid["paid_amount"] == paid["total_amount"]
+    assert paid["outstanding_balance"] == "0.00"
+    assert paid["status"] == "issued"
+    assert paid["display_status"] == "paid"
+    assert listed_paid["display_status"] == "paid"
 
 
 def test_landlord_cannot_retrieve_another_landlords_invoice(

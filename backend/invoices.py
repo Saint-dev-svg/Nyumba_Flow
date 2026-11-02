@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -20,6 +21,7 @@ from authorization import get_current_landlord_id
 
 
 invoices_bp = Blueprint("invoices", __name__, url_prefix="/api/invoices")
+BUSINESS_TIMEZONE = ZoneInfo("Africa/Nairobi")
 
 
 def _parse_date(value, field_name):
@@ -109,6 +111,16 @@ def _invoice_to_dict(invoice):
         (paid for _, paid, _ in charge_balances),
         Decimal("0.00"),
     )
+    outstanding_balance = total_amount - total_paid
+    display_status = invoice.status
+    if invoice.status == "issued":
+        if outstanding_balance <= Decimal("0.00"):
+            display_status = "paid"
+        elif invoice.due_date < datetime.now(BUSINESS_TIMEZONE).date():
+            display_status = "overdue"
+        elif total_paid > Decimal("0.00"):
+            display_status = "partially_paid"
+
     return {
         "id": invoice.id,
         "lease_id": invoice.lease_id,
@@ -117,10 +129,11 @@ def _invoice_to_dict(invoice):
         "due_date": invoice.due_date.isoformat(),
         "purpose": invoice.purpose,
         "status": invoice.status,
+        "display_status": display_status,
         "issued_at": invoice.issued_at.isoformat() if invoice.issued_at else None,
         "total_amount": str(total_amount),
         "paid_amount": str(total_paid),
-        "outstanding_balance": str(total_amount - total_paid),
+        "outstanding_balance": str(outstanding_balance),
         "charges": [
             {
                 "id": charge.id,
