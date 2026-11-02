@@ -151,6 +151,7 @@ const navigationItems = [
   'Utilities Invoices',
   'Other Invoices',
   'Payments',
+  'M-Pesa Transactions Inbox',
 ]
 
 function PropertyOverview({ refreshKey }) {
@@ -508,6 +509,7 @@ function PropertiesPage({ onDataChanged }) {
           </div>
           <button className="primary-button compact-button" type="button" onClick={() => setShowUnitForm(true)}>Add unit</button>
         </div>
+        <PayBillSettings key={selectedProperty.id} propertyId={selectedProperty.id} />
         {showUnitForm && <UnitForm propertyId={selectedProperty.id} onCancel={() => setShowUnitForm(false)} onCreated={unitCreated} />}
         <section className="unit-section" aria-labelledby="unit-list-heading">
           <div className="property-section-heading">
@@ -589,7 +591,7 @@ function PropertiesPage({ onDataChanged }) {
                   </svg>
                 </span>
                 <span className="management-property-details"><strong>{property.name}</strong><span>{property.address}</span></span>
-                <span className="property-open-label">View units <span aria-hidden="true">→</span></span>
+                <span className="property-open-label">Units &amp; PayBill <span aria-hidden="true">→</span></span>
               </button>
             </li>
           ))}
@@ -3809,6 +3811,333 @@ function PaymentsPage() {
   )
 }
 
+function PayBillSettings({ propertyId }) {
+  const [data, setData] = useState({ loading: true, configurations: [], error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+  const [shortcode, setShortcode] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
+
+  useEffect(() => {
+    let isCurrent = true
+    async function fetchConfigurations() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const result = await apiRequest(
+          `/api/properties/${encodeURIComponent(propertyId)}/mpesa-paybill`,
+          { authenticated: true },
+        )
+        if (!Array.isArray(result?.configurations)) {
+          throw new Error('PayBill configuration history could not be read.')
+        }
+        if (isCurrent) setData({ loading: false, configurations: result.configurations, error: '' })
+      } catch (error) {
+        if (isCurrent) {
+          setData((current) => ({
+            ...current,
+            loading: false,
+            error: error.message || 'Unable to load PayBill configuration.',
+          }))
+        }
+      }
+    }
+    fetchConfigurations()
+    return () => { isCurrent = false }
+  }, [propertyId, retryCount])
+
+  async function saveConfiguration(event) {
+    event.preventDefault()
+    setActionError('')
+    setSuccessMessage('')
+    setSaving(true)
+    try {
+      await apiRequest(`/api/properties/${encodeURIComponent(propertyId)}/mpesa-paybill`, {
+        method: 'POST',
+        authenticated: true,
+        body: { business_shortcode: shortcode.trim() },
+      })
+      setShortcode('')
+      setSuccessMessage('PayBill configuration saved. Previous configurations remain in history.')
+      setRetryCount((count) => count + 1)
+    } catch (error) {
+      setActionError(error.message || 'Unable to save PayBill configuration.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function setConfigurationActive(configuration, isActive) {
+    setActionError('')
+    setSuccessMessage('')
+    try {
+      await apiRequest(
+        `/api/properties/${encodeURIComponent(propertyId)}/mpesa-paybill/${encodeURIComponent(configuration.id)}`,
+        {
+          method: 'PATCH',
+          authenticated: true,
+          body: { is_active: isActive },
+        },
+      )
+      setSuccessMessage(isActive ? 'PayBill configuration activated.' : 'PayBill configuration deactivated.')
+      setRetryCount((count) => count + 1)
+    } catch (error) {
+      setActionError(error.message || 'Unable to update PayBill configuration.')
+    }
+  }
+
+  return (
+    <section className="paybill-section" aria-labelledby="paybill-settings-heading">
+      <div className="property-section-heading">
+        <div>
+          <p className="eyebrow">M-Pesa C2B</p>
+          <h3 id="paybill-settings-heading">M-Pesa PayBill Configuration</h3>
+        </div>
+      </div>
+      <p className="paybill-note">
+        Tenants use their unit number as the account reference. This setup stores no Daraja credentials
+        and does not confirm or record payments.
+      </p>
+      {actionError && <div className="form-error" role="alert">{actionError}</div>}
+      {successMessage && <div className="payment-success" role="status">{successMessage}</div>}
+      <form className="paybill-form" onSubmit={saveConfiguration}>
+        <label className="sr-only" htmlFor={`paybill-shortcode-${propertyId}`}>PayBill number</label>
+        <input
+          id={`paybill-shortcode-${propertyId}`}
+          name="business_shortcode"
+          inputMode="numeric"
+          pattern="[0-9]+"
+          maxLength={20}
+          autoComplete="off"
+          placeholder="PayBill number"
+          value={shortcode}
+          disabled={saving}
+          required
+          onChange={(event) => setShortcode(event.target.value)}
+        />
+        <button className="primary-button compact-button" type="submit" disabled={saving}>
+          {saving ? 'Saving…' : 'Add PayBill'}
+        </button>
+      </form>
+      {data.loading ? (
+        <div className="overview-message" role="status"><span className="loading-dot" aria-hidden="true" /> Loading PayBill history…</div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>PayBill settings could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Try again</button>
+        </div>
+      ) : data.configurations.length === 0 ? (
+        <p className="paybill-empty">No PayBill is configured for this property.</p>
+      ) : (
+        <ul className="paybill-list">
+          {data.configurations.map((configuration) => (
+            <li className="paybill-card" key={configuration.id}>
+              <div>
+                <strong>{configuration.business_shortcode}</strong>
+                <span>Account reference: unit number</span>
+                <small>
+                  Confirmation callback: <code>{configuration.confirmation_callback_path}</code>
+                  <br />
+                  Validation callback: <code>{configuration.validation_callback_path}</code>
+                </small>
+              </div>
+              <div className="paybill-card-actions">
+                <span className={`status-pill${configuration.is_active ? ' is-active' : ''}`}>
+                  {configuration.is_active ? 'Active' : 'Inactive'}
+                </span>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setConfigurationActive(configuration, !configuration.is_active)}
+                >
+                  {configuration.is_active ? 'Deactivate' : 'Reactivate'}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function MpesaTransactionsPage() {
+  const [data, setData] = useState({ loading: true, transactions: [], error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+  const [status, setStatus] = useState('all')
+  const [selectedTransaction, setSelectedTransaction] = useState(null)
+  const [detailState, setDetailState] = useState({ loading: false, transaction: null, error: '' })
+  const [detailRetry, setDetailRetry] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+    async function fetchTransactions() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const params = status === 'all' ? '' : `?status=${encodeURIComponent(status)}`
+        const result = await apiRequest(`/api/mpesa/transactions${params}`, { authenticated: true })
+        if (!Array.isArray(result?.transactions)) {
+          throw new Error('The M-Pesa callback inbox could not be read.')
+        }
+        if (isCurrent) setData({ loading: false, transactions: result.transactions, error: '' })
+      } catch (error) {
+        if (isCurrent) {
+          setData((current) => ({
+            ...current,
+            loading: false,
+            error: error.message || 'Unable to load M-Pesa transactions.',
+          }))
+        }
+      }
+    }
+    fetchTransactions()
+    return () => { isCurrent = false }
+  }, [retryCount, status])
+
+  useEffect(() => {
+    if (selectedTransaction === null) return undefined
+
+    let isCurrent = true
+    async function fetchTransactionDetails() {
+      setDetailState({ loading: true, transaction: null, error: '' })
+      try {
+        const result = await apiRequest(
+          `/api/mpesa/transactions/${encodeURIComponent(selectedTransaction)}`,
+          { authenticated: true },
+        )
+        if (!result?.transaction || result.transaction.id !== selectedTransaction) {
+          throw new Error('Transaction details could not be read.')
+        }
+        if (isCurrent) setDetailState({ loading: false, transaction: result.transaction, error: '' })
+      } catch (error) {
+        if (isCurrent) {
+          setDetailState({
+            loading: false,
+            transaction: null,
+            error: error.message || 'Unable to load transaction details.',
+          })
+        }
+      }
+    }
+
+    fetchTransactionDetails()
+    return () => { isCurrent = false }
+  }, [selectedTransaction, detailRetry])
+
+  return (
+    <section className="management-page" aria-labelledby="mpesa-inbox-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Unverified callbacks</p>
+          <h2 id="mpesa-inbox-heading">M-Pesa Transactions Inbox</h2>
+          <p>These are callback inbox records only. They are not confirmed payments and do not affect balances or receipts.</p>
+        </div>
+        <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Refresh</button>
+      </div>
+      <div className="mpesa-inbox-filter">
+        <label htmlFor="mpesa-status-filter">Inbox status</label>
+        <select id="mpesa-status-filter" value={status} onChange={(event) => setStatus(event.target.value)}>
+          <option value="all">All statuses</option>
+          <option value="received">Received</option>
+          <option value="matched">Matched</option>
+          <option value="exception">Exception</option>
+          <option value="processed">Processed</option>
+        </select>
+      </div>
+      {selectedTransaction !== null && (
+        <section className="mpesa-transaction-detail" aria-labelledby="mpesa-transaction-detail-heading">
+          <div className="property-section-heading">
+            <h3 id="mpesa-transaction-detail-heading">Transaction details</h3>
+            <button className="text-button" type="button" onClick={() => setSelectedTransaction(null)}>
+              Close details
+            </button>
+          </div>
+          {detailState.loading ? (
+            <div className="overview-message" role="status">
+              <span className="loading-dot" aria-hidden="true" /> Loading transaction details…
+            </div>
+          ) : detailState.error ? (
+            <div className="overview-message overview-error" role="alert">
+              <div><h4>Transaction details could not be loaded</h4><p>{detailState.error}</p></div>
+              <button className="retry-button" type="button" onClick={() => setDetailRetry((count) => count + 1)}>
+                Try again
+              </button>
+            </div>
+          ) : detailState.transaction ? (
+            <>
+              <dl className="payment-history-details">
+                <div><dt>Provider transaction ID</dt><dd>{detailState.transaction.provider_transaction_id || 'Unavailable'}</dd></div>
+                <div><dt>Property</dt><dd>{detailState.transaction.property_name || 'Unavailable'}</dd></div>
+                <div><dt>Unit</dt><dd>{detailState.transaction.unit_number || 'Unmatched'}</dd></div>
+                <div><dt>Lease ID</dt><dd>{detailState.transaction.lease_id ?? 'Unmatched'}</dd></div>
+                <div><dt>Received</dt><dd>{formatStatementDate(detailState.transaction.received_at, true)}</dd></div>
+                <div><dt>Last updated</dt><dd>{formatStatementDate(detailState.transaction.updated_at, true)}</dd></div>
+                <div><dt>Processed</dt><dd>{detailState.transaction.processed_at ? formatStatementDate(detailState.transaction.processed_at, true) : 'Not processed'}</dd></div>
+                <div><dt>Verification</dt><dd>{detailState.transaction.verification_status || 'Unverified'}</dd></div>
+              </dl>
+              {detailState.transaction.metadata && (
+                <div className="mpesa-provider-metadata">
+                  <h4>Provider metadata</h4>
+                  <pre>{JSON.stringify(detailState.transaction.metadata, null, 2)}</pre>
+                </div>
+              )}
+            </>
+          ) : null}
+        </section>
+      )}
+      {data.loading ? (
+        <div className="overview-message" role="status"><span className="loading-dot" aria-hidden="true" /> Loading M-Pesa inbox…</div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>M-Pesa inbox could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Try again</button>
+        </div>
+      ) : data.transactions.length === 0 ? (
+        <div className="overview-empty compact-empty">
+          <h4>No callback transactions</h4>
+          <p>Incoming C2B callbacks will appear here for investigation.</p>
+        </div>
+      ) : (
+        <ul className="mpesa-transaction-list">
+          {data.transactions.map((transaction) => (
+            <li className="mpesa-transaction-card" key={transaction.id}>
+              <div className="mpesa-transaction-heading">
+                <div>
+                  <strong>{transaction.provider_transaction_id || 'Missing provider transaction ID'}</strong>
+                  <span>{transaction.property_name || 'Property unavailable'}{transaction.unit_number ? ` · Unit ${transaction.unit_number}` : ''}</span>
+                </div>
+                <span className={`status-pill${transaction.processing_status === 'matched' ? ' is-active' : ''}`}>
+                  {transaction.processing_status}
+                </span>
+              </div>
+              <dl className="payment-history-details">
+                <div><dt>Amount</dt><dd>{transaction.amount ? formatKes(transaction.amount) : 'Unavailable'}</dd></div>
+                <div><dt>PayBill</dt><dd>{transaction.business_shortcode || 'Unavailable'}</dd></div>
+                <div><dt>Account reference</dt><dd>{transaction.account_reference || 'Unavailable'}</dd></div>
+                <div><dt>Transaction time</dt><dd>{transaction.provider_transaction_at ? formatStatementDate(transaction.provider_transaction_at, true) : 'Unavailable'}</dd></div>
+                <div><dt>Verification</dt><dd>Unverified</dd></div>
+              </dl>
+              {transaction.exception_reason && (
+                <p className="mpesa-exception-reason"><strong>Exception:</strong> {transaction.exception_reason}</p>
+              )}
+              <button
+                className="text-button mpesa-details-button"
+                type="button"
+                aria-expanded={selectedTransaction === transaction.id}
+                onClick={() => setSelectedTransaction((current) => (
+                  current === transaction.id ? null : transaction.id
+                ))}
+              >
+                {selectedTransaction === transaction.id ? 'Hide details' : 'View transaction details'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 function isValidBillingDueDay(value) {
   return Number.isInteger(value) && value >= 1 && value <= 28
 }
@@ -4116,6 +4445,8 @@ function DashboardShell({ user }) {
             <InvoicesPage purpose="other" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
           ) : page === 'Payments' ? (
             <PaymentsPage />
+          ) : page === 'M-Pesa Transactions Inbox' ? (
+            <MpesaTransactionsPage />
           ) : (
             null
           )}

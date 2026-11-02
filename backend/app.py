@@ -11,6 +11,7 @@ from auth import auth_bp
 from invoices import invoices_bp
 from leases import leases_bp
 from payments import payments_bp
+from mpesa import mpesa_bp
 from properties import properties_bp
 from reports import reports_bp
 from tenants import tenants_bp
@@ -53,6 +54,7 @@ def create_app(test_config=None):
     app.register_blueprint(invoices_bp)
     app.register_blueprint(leases_bp)
     app.register_blueprint(payments_bp)
+    app.register_blueprint(mpesa_bp)
     app.register_blueprint(properties_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(tenants_bp)

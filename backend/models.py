@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from email.policy import default
 
-from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from extensions import db
@@ -99,6 +99,11 @@ class Property(db.Model):
     utility_settings = db.relationship(
         "PropertyUtilitySettings", back_populates="property", uselist=False,
         cascade="all, delete-orphan",
+    )
+    mpesa_paybill_configurations = db.relationship(
+        "PropertyPayBillConfiguration",
+        back_populates="property",
+        passive_deletes=True,
     )
     
     __table_args__ = (
@@ -556,5 +561,153 @@ class PaymentAttempt(db.Model):
         CheckConstraint(
             "status != 'succeeded' OR payment_id IS NOT NULL",
             name="ck_successful_attempt_has_payment",
+        ),
+    )
+
+
+class PropertyPayBillConfiguration(db.Model):
+    """Historical property-scoped Safaricom PayBill configuration."""
+
+    __tablename__ = "property_paybill_configurations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    business_shortcode = db.Column(db.String(20), nullable=False)
+    account_reference_type = db.Column(
+        db.String(20), nullable=False, default="unit_number"
+    )
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    property = db.relationship(
+        "Property", back_populates="mpesa_paybill_configurations"
+    )
+    callback_transactions = db.relationship(
+        "MpesaCallbackTransaction",
+        back_populates="paybill_configuration",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "account_reference_type = 'unit_number'",
+            name="ck_paybill_account_reference_type",
+        ),
+        UniqueConstraint(
+            "business_shortcode",
+            name="uq_property_paybill_shortcode",
+        ),
+        Index(
+            "uq_paybill_active_property",
+            "property_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+
+class MpesaCallbackTransaction(db.Model):
+    """Unverified Daraja callback inbox row; never a financial posting."""
+
+    __tablename__ = "mpesa_callback_transactions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    paybill_configuration_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            "property_paybill_configurations.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+    provider = db.Column(db.String(30), nullable=False, default="safaricom")
+    provider_transaction_id = db.Column(db.String(100), nullable=True)
+    business_shortcode = db.Column(db.String(20), nullable=True)
+    account_reference = db.Column(db.String(100), nullable=True)
+    amount = db.Column(db.Numeric(12, 2), nullable=True)
+    currency = db.Column(db.String(3), nullable=True, default="KES")
+    provider_transaction_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    provider_metadata = db.Column("metadata", db.JSON, nullable=True)
+    processing_status = db.Column(
+        db.String(20), nullable=False, default="received"
+    )
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("units.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    lease_id = db.Column(
+        db.Integer,
+        db.ForeignKey("leases.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    exception_reason = db.Column(db.Text, nullable=True)
+    received_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    processed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    paybill_configuration = db.relationship(
+        "PropertyPayBillConfiguration",
+        back_populates="callback_transactions",
+    )
+    property = db.relationship("Property", foreign_keys=[property_id])
+    unit = db.relationship("Unit")
+    lease = db.relationship("Lease")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_transaction_id",
+            name="uq_mpesa_callback_provider_transaction",
+        ),
+        CheckConstraint(
+            "processing_status IN ('received', 'matched', 'exception', 'processed')",
+            name="ck_mpesa_callback_processing_status",
+        ),
+        CheckConstraint(
+            "amount IS NULL OR amount > 0",
+            name="ck_mpesa_callback_amount_positive",
+        ),
+        CheckConstraint(
+            "currency IS NULL OR length(currency) = 3",
+            name="ck_mpesa_callback_currency_length",
+        ),
+        Index(
+            "ix_mpesa_callback_status_received",
+            "processing_status",
+            "received_at",
         ),
     )
