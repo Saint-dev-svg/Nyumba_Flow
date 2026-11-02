@@ -606,11 +606,17 @@ function TenantForm({ tenant, onCancel, onSaved }) {
   const [nationalIdLast4, setNationalIdLast4] = useState(tenant?.national_id_last4 || '')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
+  const [emailError, setEmailError] = useState('')
+  const submissionInProgress = useRef(false)
   const isEditing = Boolean(tenant)
 
   async function handleSubmit(event) {
     event.preventDefault()
+    if (submissionInProgress.current) return
+
+    submissionInProgress.current = true
     setError('')
+    setEmailError('')
     const cleanName = fullName.trim()
     const cleanEmail = email.trim().toLowerCase()
     const cleanPhone = phoneNumber.trim()
@@ -618,18 +624,22 @@ function TenantForm({ tenant, onCancel, onSaved }) {
 
     if (!cleanName || cleanName.length > 120) {
       setError('Full name is required and must be at most 120 characters.')
+      submissionInProgress.current = false
       return
     }
     if (!cleanEmail || cleanEmail.length > 255 || !cleanEmail.includes('@') || /\s/.test(cleanEmail)) {
       setError('Enter a valid email address of at most 255 characters.')
+      submissionInProgress.current = false
       return
     }
     if (cleanPhone.length > 30) {
       setError('Phone number must be at most 30 characters.')
+      submissionInProgress.current = false
       return
     }
     if (cleanLast4 && !/^\d{4}$/.test(cleanLast4)) {
       setError('National ID last four must contain exactly 4 digits.')
+      submissionInProgress.current = false
       return
     }
 
@@ -646,10 +656,16 @@ function TenantForm({ tenant, onCancel, onSaved }) {
         authenticated: true,
         body,
       })
-      onSaved()
+      onSaved(isEditing ? 'updated' : 'created')
     } catch (requestError) {
-      setError(requestError.message || `Unable to ${isEditing ? 'update' : 'register'} tenant. Please try again.`)
+      const message = requestError.message || `Unable to ${isEditing ? 'update' : 'register'} tenant. Please try again.`
+      if (requestError.status === 409) {
+        setEmailError(message)
+      } else {
+        setError(message)
+      }
     } finally {
+      submissionInProgress.current = false
       setIsSaving(false)
     }
   }
@@ -668,7 +684,24 @@ function TenantForm({ tenant, onCancel, onSaved }) {
         </div>
         <div className="field-group">
           <label htmlFor="tenant-email">Email address</label>
-          <input id="tenant-email" name="email" type="email" inputMode="email" value={email} maxLength={255} autoComplete="email" disabled={isSaving} required onChange={(event) => setEmail(event.target.value)} />
+          <input
+            id="tenant-email"
+            name="email"
+            type="email"
+            inputMode="email"
+            value={email}
+            maxLength={255}
+            autoComplete="email"
+            disabled={isSaving}
+            required
+            aria-invalid={Boolean(emailError)}
+            aria-describedby={emailError ? 'tenant-email-error' : undefined}
+            onChange={(event) => {
+              setEmail(event.target.value)
+              setEmailError('')
+            }}
+          />
+          {emailError && <p className="form-error tenant-email-error" id="tenant-email-error" role="alert">{emailError}</p>}
         </div>
         <div className="field-group">
           <label htmlFor="tenant-phone">Phone number <span className="optional-label">Optional</span></label>
@@ -685,6 +718,16 @@ function TenantForm({ tenant, onCancel, onSaved }) {
         </button>
       </div>
     </form>
+  )
+}
+
+function TenantNotification({ message, onDismiss }) {
+  if (!message) return null
+  return (
+    <div className="tenant-notification" role="status" aria-live="polite">
+      <span>{message}</span>
+      <button className="tenant-notification-dismiss" type="button" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
+    </div>
   )
 }
 
@@ -718,6 +761,7 @@ function TenantsPage() {
   const [leaseStatusFilter, setLeaseStatusFilter] = useState('all')
   const [selectedTenantId, setSelectedTenantId] = useState(null)
   const [tenantDetails, setTenantDetails] = useState({ loading: false, tenant: null, error: '' })
+  const [successMessage, setSuccessMessage] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [listError, setListError] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -826,9 +870,10 @@ function TenantsPage() {
     return () => { isCurrent = false }
   }, [selectedTenantId, leaseContextRetry, leases])
 
-  function tenantSaved() {
+  function tenantSaved(action) {
     setShowCreateForm(false)
     setIsEditing(false)
+    setSuccessMessage(action === 'updated' ? 'Tenant details updated successfully.' : 'Tenant registered successfully.')
     setListReload((count) => count + 1)
     if (selectedTenantId !== null) setDetailReload((count) => count + 1)
   }
@@ -871,6 +916,7 @@ function TenantsPage() {
         <button className="back-button" type="button" onClick={closeTenantDetails}>
           <span aria-hidden="true">←</span> All tenants
         </button>
+        <TenantNotification message={successMessage} onDismiss={() => setSuccessMessage('')} />
         {tenantDetails.loading ? (
           <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading tenant details…</div>
         ) : tenantDetails.error ? (
@@ -990,8 +1036,11 @@ function TenantsPage() {
           <h2 id="tenants-page-heading">Tenants</h2>
           <p>Keep tenant contact details available for your property records.</p>
         </div>
-        <button className="primary-button compact-button" type="button" onClick={() => setShowCreateForm(true)}>Register tenant</button>
+        {!showCreateForm && (
+          <button className="primary-button compact-button" type="button" onClick={() => setShowCreateForm(true)}>Register tenant</button>
+        )}
       </div>
+      <TenantNotification message={successMessage} onDismiss={() => setSuccessMessage('')} />
       {showCreateForm && <TenantForm onCancel={() => setShowCreateForm(false)} onSaved={tenantSaved} />}
       {isLoading ? (
         <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading tenants…</div>

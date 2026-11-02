@@ -710,6 +710,43 @@ button.nav-item {
   margin-top: 2px;
 }
 
+.tenant-email-error {
+  margin: 8px 0 0;
+}
+
+.tenant-notification {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 11px 14px;
+  border: 1px solid #dbe5d9;
+  border-radius: var(--radius-control);
+  background: #f5f8f3;
+  color: var(--color-accent-hover);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tenant-notification-dismiss {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.tenant-notification-dismiss:hover {
+  background: rgb(69 107 85 / 10%);
+}
+
 .billing-settings-notice {
   margin-bottom: 22px;
   padding: 14px 16px;
