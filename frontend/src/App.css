@@ -883,6 +883,22 @@ button.nav-item {
   list-style: none;
 }
 
+.tenant-list-filters {
+  margin-bottom: 18px;
+  padding: 16px 18px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.tenant-list-filters .field-group {
+  margin-bottom: 15px;
+}
+
+.tenant-no-results .secondary-button {
+  margin-top: 12px;
+}
+
 .tenant-list-card {
   display: flex;
   width: 100%;

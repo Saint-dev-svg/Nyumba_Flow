@@ -690,6 +690,9 @@ function TenantForm({ tenant, onCancel, onSaved }) {
 
 function TenantsPage() {
   const [tenants, setTenants] = useState([])
+  const [leases, setLeases] = useState([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [leaseStatusFilter, setLeaseStatusFilter] = useState('all')
   const [selectedTenantId, setSelectedTenantId] = useState(null)
   const [tenantDetails, setTenantDetails] = useState({ loading: false, tenant: null, error: '' })
   const [isLoading, setIsLoading] = useState(true)
@@ -706,11 +709,19 @@ function TenantsPage() {
       setIsLoading(true)
       setListError('')
       try {
-        const result = await apiRequest('/api/tenants', { authenticated: true })
-        if (!Array.isArray(result?.tenants)) throw new Error('The tenant list could not be read. Please try again.')
-        if (isCurrent) setTenants(result.tenants)
+        const [tenantResult, leaseResult] = await Promise.all([
+          apiRequest('/api/tenants', { authenticated: true }),
+          apiRequest('/api/leases', { authenticated: true }),
+        ])
+        if (!Array.isArray(tenantResult?.tenants) || !Array.isArray(leaseResult?.leases)) {
+          throw new Error('Tenant or lease information could not be read. Please try again.')
+        }
+        if (isCurrent) {
+          setTenants(tenantResult.tenants)
+          setLeases(leaseResult.leases)
+        }
       } catch (error) {
-        if (isCurrent) setListError(error.message || 'Unable to load tenants. Please try again.')
+        if (isCurrent) setListError(error.message || 'Unable to load tenant and lease information. Please try again.')
       } finally {
         if (isCurrent) setIsLoading(false)
       }
@@ -749,6 +760,23 @@ function TenantsPage() {
     setIsEditing(false)
     setShowStatement(false)
   }
+
+  const activeLeaseTenantIds = new Set(
+    leases.filter((lease) => lease.is_active).map((lease) => lease.tenant_id),
+  )
+  const normalizedSearch = searchQuery.trim().toLowerCase()
+  const filteredTenants = tenants.filter((tenant) => {
+    const hasActiveLease = activeLeaseTenantIds.has(tenant.id)
+    const matchesStatus = leaseStatusFilter === 'all'
+      || (leaseStatusFilter === 'active' && hasActiveLease)
+      || (leaseStatusFilter === 'none' && !hasActiveLease)
+    const matchesSearch = !normalizedSearch || [
+      tenant.full_name,
+      tenant.email,
+      tenant.phone_number || '',
+    ].some((value) => value.toLowerCase().includes(normalizedSearch))
+    return matchesStatus && matchesSearch
+  })
 
   if (selectedTenantId !== null) {
     return (
@@ -827,21 +855,64 @@ function TenantsPage() {
           <p>Register a tenant to keep their contact details with your property records.</p>
         </div>
       ) : (
-        <ul className="tenant-list">
-          {tenants.map((tenant) => (
-            <li key={tenant.id}>
-              <button className="tenant-list-card" type="button" onClick={() => setSelectedTenantId(tenant.id)}>
-                <span className="tenant-avatar" aria-hidden="true">{tenant.full_name.trim().charAt(0).toUpperCase()}</span>
-                <span className="tenant-list-details">
-                  <strong>{tenant.full_name}</strong>
-                  <span>{tenant.email}</span>
-                </span>
-                <span className="tenant-list-phone">{tenant.phone_number || 'No phone number'}</span>
-                <span className="property-open-label">View details <span aria-hidden="true">→</span></span>
+        <>
+          <div className="management-fields tenant-list-filters">
+            <div className="field-group">
+              <label htmlFor="tenant-search">Search tenants</label>
+              <input
+                id="tenant-search"
+                type="search"
+                value={searchQuery}
+                placeholder="Name, email, or phone"
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </div>
+            <div className="field-group">
+              <label htmlFor="tenant-lease-status">Lease status</label>
+              <select
+                id="tenant-lease-status"
+                value={leaseStatusFilter}
+                onChange={(event) => setLeaseStatusFilter(event.target.value)}
+              >
+                <option value="all">All tenants</option>
+                <option value="active">Active lease</option>
+                <option value="none">No active lease</option>
+              </select>
+            </div>
+          </div>
+          {filteredTenants.length === 0 ? (
+            <div className="overview-empty compact-empty tenant-no-results" role="status">
+              <h4>No tenants match these filters</h4>
+              <p>Try a different search or lease status.</p>
+              <button
+                className="secondary-button compact-button"
+                type="button"
+                onClick={() => {
+                  setSearchQuery('')
+                  setLeaseStatusFilter('all')
+                }}
+              >
+                Clear search and filter
               </button>
-            </li>
-          ))}
-        </ul>
+            </div>
+          ) : (
+            <ul className="tenant-list">
+              {filteredTenants.map((tenant) => (
+                <li key={tenant.id}>
+                  <button className="tenant-list-card" type="button" onClick={() => setSelectedTenantId(tenant.id)}>
+                    <span className="tenant-avatar" aria-hidden="true">{tenant.full_name.trim().charAt(0).toUpperCase()}</span>
+                    <span className="tenant-list-details">
+                      <strong>{tenant.full_name}</strong>
+                      <span>{tenant.email}</span>
+                    </span>
+                    <span className="tenant-list-phone">{tenant.phone_number || 'No phone number'}</span>
+                    <span className="property-open-label">View details <span aria-hidden="true">→</span></span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </section>
   )
