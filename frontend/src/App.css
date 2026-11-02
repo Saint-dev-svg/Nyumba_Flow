@@ -710,6 +710,28 @@ button.nav-item {
   margin-top: 2px;
 }
 
+.billing-settings-notice {
+  margin-bottom: 22px;
+  padding: 14px 16px;
+  border: 1px solid #dbe5d9;
+  border-radius: var(--radius-control);
+  background: #f5f8f3;
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.billing-settings-success {
+  margin-bottom: 18px;
+  padding: 11px 12px;
+  border: 1px solid #dbe5d9;
+  border-radius: var(--radius-control);
+  background: #f5f8f3;
+  color: var(--color-accent-hover);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .management-property-list,
 .unit-list {
   display: grid;
