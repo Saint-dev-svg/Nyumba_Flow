@@ -139,17 +139,17 @@ function LoginScreen() {
 }
 
 const navigationItems = [
-  { label: 'Overview', available: true },
-  { label: 'Financial Overview', available: true },
-  { label: 'Arrears', available: true },
-  { label: 'Properties', available: true },
-  { label: 'Tenants', available: true },
-  { label: 'Leases', available: true },
-  { label: 'Monthly Billing', available: true },
-  { label: 'Rent Invoices', available: true },
-  { label: 'Utilities Invoices', available: true },
-  { label: 'Other Invoices', available: true },
-  { label: 'Payments', available: false },
+  'Overview',
+  'Financial Overview',
+  'Arrears',
+  'Properties',
+  'Tenants',
+  'Leases',
+  'Monthly Billing',
+  'Rent Invoices',
+  'Utilities Invoices',
+  'Other Invoices',
+  'Payments',
 ]
 
 function PropertyOverview({ refreshKey }) {
@@ -2675,6 +2675,787 @@ function ArrearsPage() {
   )
 }
 
+function formatPaymentMethod(method) {
+  return ({
+    cash: 'Cash',
+    bank_transfer: 'Bank transfer',
+    'M-pesa': 'M-Pesa',
+    other: 'Other',
+  })[method] || 'Unavailable'
+}
+
+function PaymentForm({ onCancel, onCreated }) {
+  const [tenantState, setTenantState] = useState({ loading: true, tenants: [], error: '' })
+  const [tenantRetry, setTenantRetry] = useState(0)
+  const [tenantId, setTenantId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [method, setMethod] = useState('')
+  const [reference, setReference] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+  const savingRef = useRef(false)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function fetchTenants() {
+      setTenantState((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const result = await apiRequest('/api/tenants', { authenticated: true })
+        if (!Array.isArray(result?.tenants)) {
+          throw new Error('The tenant list could not be read. Please try again.')
+        }
+        if (isCurrent) setTenantState({ loading: false, tenants: result.tenants, error: '' })
+      } catch (requestError) {
+        if (isCurrent) {
+          setTenantState((current) => ({
+            ...current,
+            loading: false,
+            error: requestError.message || 'Unable to load tenants.',
+          }))
+        }
+      }
+    }
+
+    fetchTenants()
+    return () => { isCurrent = false }
+  }, [tenantRetry])
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setError('')
+
+    const tenant = tenantState.tenants.find((item) => String(item.id) === tenantId)
+    if (!tenant) {
+      setError('Select a tenant for this payment.')
+      return
+    }
+
+    const amountCents = moneyToCents(amount)
+    if (amountCents === null || amountCents === 0n) {
+      setError('Enter a positive amount with no more than two decimal places, up to KES 9,999,999,999.99.')
+      return
+    }
+
+    if (!['M-pesa', 'cash', 'bank_transfer', 'other'].includes(method)) {
+      setError('Select a valid payment method.')
+      return
+    }
+
+    if (reference.length > 100) {
+      setError('Reference must be at most 100 characters.')
+      return
+    }
+
+    if (savingRef.current) return
+    savingRef.current = true
+    setIsSaving(true)
+    try {
+      const result = await apiRequest('/api/payments', {
+        method: 'POST',
+        authenticated: true,
+        body: {
+          tenant_id: tenant.id,
+          amount: centsToMoney(amountCents),
+          method,
+          reference: reference.trim() || null,
+        },
+      })
+      if (!result?.payment) {
+        throw new Error('Payment could not be confirmed. Please refresh the payment history.')
+      }
+      onCreated(result.payment)
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to record this payment. Please try again.')
+    } finally {
+      savingRef.current = false
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <form className="management-form payment-form" onSubmit={handleSubmit} noValidate aria-labelledby="payment-form-title">
+      <div className="management-form-heading">
+        <h3 id="payment-form-title">Record a payment</h3>
+        <button className="text-button" type="button" onClick={onCancel} disabled={isSaving}>Cancel</button>
+      </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {tenantState.loading ? (
+        <div className="overview-message" role="status" aria-live="polite">
+          <span className="loading-dot" aria-hidden="true" /> Loading tenants…
+        </div>
+      ) : tenantState.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Tenants could not be loaded</h4><p>{tenantState.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setTenantRetry((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : tenantState.tenants.length === 0 ? (
+        <p className="form-guidance">Register a tenant before recording a payment.</p>
+      ) : (
+        <>
+          <div className="management-fields">
+            <div className="field-group">
+              <label htmlFor="payment-tenant">Tenant</label>
+              <select
+                id="payment-tenant"
+                value={tenantId}
+                disabled={isSaving}
+                required
+                onChange={(event) => { setTenantId(event.target.value); setError('') }}
+              >
+                <option value="">Select a tenant</option>
+                {tenantState.tenants.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.full_name}{tenant.email ? ` · ${tenant.email}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field-group">
+              <label htmlFor="payment-amount">Amount (KES)</label>
+              <input
+                id="payment-amount"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                value={amount}
+                disabled={isSaving}
+                required
+                onChange={(event) => { setAmount(event.target.value); setError('') }}
+              />
+            </div>
+            <div className="field-group">
+              <label htmlFor="payment-method">Payment method</label>
+              <select
+                id="payment-method"
+                value={method}
+                disabled={isSaving}
+                required
+                onChange={(event) => { setMethod(event.target.value); setError('') }}
+              >
+                <option value="">Select a method</option>
+                <option value="M-pesa">M-Pesa</option>
+                <option value="cash">Cash</option>
+                <option value="bank_transfer">Bank transfer</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div className="field-group">
+              <label htmlFor="payment-reference">Reference / transaction number (optional)</label>
+              <input
+                id="payment-reference"
+                type="text"
+                maxLength={100}
+                value={reference}
+                disabled={isSaving}
+                onChange={(event) => { setReference(event.target.value); setError('') }}
+              />
+            </div>
+          </div>
+          <div className="management-form-actions">
+            <button className="primary-button compact-button" type="submit" disabled={isSaving}>
+              {isSaving ? 'Recording…' : 'Record payment'}
+            </button>
+          </div>
+        </>
+      )}
+    </form>
+  )
+}
+
+function PaymentReceiptView({ paymentId, onBack }) {
+  const [receiptState, setReceiptState] = useState({
+    loading: true,
+    receipt: null,
+    payment: null,
+    error: '',
+  })
+  const [retryCount, setRetryCount] = useState(0)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function fetchReceipt() {
+      setReceiptState({ loading: true, receipt: null, payment: null, error: '' })
+      try {
+        const result = await apiRequest(
+          `/api/payments/${encodeURIComponent(paymentId)}/receipt`,
+          { authenticated: true },
+        )
+        if (!result?.receipt || !result?.payment) {
+          throw new Error('Receipt information could not be read. Please try again.')
+        }
+        if (isCurrent) {
+          setReceiptState({
+            loading: false,
+            receipt: result.receipt,
+            payment: result.payment,
+            error: '',
+          })
+        }
+      } catch (requestError) {
+        if (isCurrent) {
+          setReceiptState({
+            loading: false,
+            receipt: null,
+            payment: null,
+            error: requestError.message || 'Unable to load this receipt.',
+          })
+        }
+      }
+    }
+
+    fetchReceipt()
+    return () => { isCurrent = false }
+  }, [paymentId, retryCount])
+
+  useEffect(() => {
+    if (!receiptState.receipt) return undefined
+    const printScopeClass = 'payment-receipt-print-active'
+    document.body.classList.add(printScopeClass)
+    return () => document.body.classList.remove(printScopeClass)
+  }, [receiptState.receipt])
+
+  const { receipt, payment } = receiptState
+  const currency = receipt?.currency || payment?.currency || 'KES'
+  const formatReceiptAmount = (value) => (
+    currency === 'KES' ? formatKes(value) : formatStatementMoney(value, currency)
+  )
+
+  return (
+    <section className="payment-receipt-page" aria-labelledby="payment-receipt-heading">
+      <div className="payment-receipt-toolbar payment-receipt-screen-only">
+        <button className="back-button" type="button" onClick={onBack}>
+          <span aria-hidden="true">←</span> Payment details
+        </button>
+        <button
+          className="secondary-button compact-button"
+          type="button"
+          onClick={() => window.print()}
+          disabled={!receipt || receiptState.loading}
+        >
+          Print Receipt
+        </button>
+      </div>
+      {receiptState.loading ? (
+        <div className="overview-message" role="status" aria-live="polite">
+          <span className="loading-dot" aria-hidden="true" /> Loading receipt…
+        </div>
+      ) : receiptState.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Receipt could not be loaded</h4><p>{receiptState.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : receipt && payment ? (
+        <article className="payment-receipt-print-root" aria-labelledby="payment-receipt-heading">
+          <header className="payment-receipt-brand">
+            <span className="brand-mark" aria-hidden="true">N</span>
+            <div><strong>NyumbaFlow</strong><span>Property management</span></div>
+            <span className="payment-receipt-label">Payment receipt</span>
+          </header>
+          <div className="payment-receipt-title">
+            <div>
+              <p className="eyebrow">Official receipt</p>
+              <h2 id="payment-receipt-heading">{receipt.receipt_number || `Payment #${payment.id}`}</h2>
+            </div>
+            <span className="payment-receipt-issued">
+              Issued {formatStatementDate(receipt.issued_at, true)}
+            </span>
+          </div>
+          <dl className="payment-receipt-parties">
+            <div><dt>Received from</dt><dd>{payment.tenant?.full_name || receipt.recipient_name || 'Tenant unavailable'}</dd></div>
+            <div><dt>Payment date</dt><dd>{formatStatementDate(payment.received_at, true)}</dd></div>
+            <div><dt>Payment method</dt><dd>{formatPaymentMethod(payment.method)}</dd></div>
+            <div><dt>Reference</dt><dd>{payment.reference || 'Not provided'}</dd></div>
+          </dl>
+
+          <section className="payment-receipt-section" aria-labelledby="payment-receipt-amount-heading">
+            <h3 id="payment-receipt-amount-heading">Payment received</h3>
+            <div className="payment-receipt-total">
+              <span>Total amount received</span>
+              <strong>{formatReceiptAmount(receipt.amount ?? payment.amount)}</strong>
+            </div>
+          </section>
+
+          <section className="payment-receipt-section" aria-labelledby="payment-receipt-allocation-heading">
+            <h3 id="payment-receipt-allocation-heading">Allocation breakdown</h3>
+            {payment.allocations?.length ? (
+              <ul className="payment-receipt-allocation-list">
+                {payment.allocations.map((allocation, index) => (
+                  <li key={`${allocation.charge_id}-${index}`}>
+                    <div>
+                      <strong>{statementPurposeLabel(allocation.charge_category)}</strong>
+                      <span>
+                        Invoice #{allocation.invoice_id}
+                        {allocation.charge_description ? ` · ${allocation.charge_description}` : ''}
+                      </span>
+                      <span>{allocation.invoice_period_start} – {allocation.invoice_period_end}</span>
+                    </div>
+                    <strong>{formatReceiptAmount(allocation.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="payment-receipt-no-allocations">No invoice allocations have been applied to this payment.</p>
+            )}
+          </section>
+
+          <dl className="payment-receipt-summary">
+            <div><dt>Total allocated</dt><dd>{formatReceiptAmount(payment.allocated_amount)}</dd></div>
+            {moneyToCents(payment.unallocated_amount) > 0n && (
+              <div><dt>Unallocated balance</dt><dd>{formatReceiptAmount(payment.unallocated_amount)}</dd></div>
+            )}
+          </dl>
+          <footer className="payment-receipt-footer">
+            Thank you. This receipt confirms payment received by NyumbaFlow.
+          </footer>
+        </article>
+      ) : null}
+    </section>
+  )
+}
+
+function PaymentDetailsPage({ paymentId, onBack, onAllocated }) {
+  const [data, setData] = useState({
+    loading: true,
+    payment: null,
+    invoices: [],
+    leases: [],
+    error: '',
+  })
+  const [retryCount, setRetryCount] = useState(0)
+  const [allocations, setAllocations] = useState({})
+  const [isSaving, setIsSaving] = useState(false)
+  const savingRef = useRef(false)
+  const [error, setError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
+  const [showReceipt, setShowReceipt] = useState(false)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function fetchPaymentDetails() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const [paymentResult, invoiceResult, leaseResult] = await Promise.all([
+          apiRequest(`/api/payments/${encodeURIComponent(paymentId)}`, { authenticated: true }),
+          apiRequest('/api/invoices', { authenticated: true }),
+          apiRequest('/api/leases', { authenticated: true }),
+        ])
+        if (!paymentResult?.payment || !Array.isArray(invoiceResult?.invoices) || !Array.isArray(leaseResult?.leases)) {
+          throw new Error('Payment allocation information could not be read. Please try again.')
+        }
+        if (isCurrent) {
+          setData({
+            loading: false,
+            payment: paymentResult.payment,
+            invoices: invoiceResult.invoices,
+            leases: leaseResult.leases,
+            error: '',
+          })
+        }
+      } catch (requestError) {
+        if (isCurrent) {
+          setData((current) => ({
+            ...current,
+            loading: false,
+            error: requestError.message || 'Unable to load payment details.',
+          }))
+        }
+      }
+    }
+
+    fetchPaymentDetails()
+    return () => { isCurrent = false }
+  }, [paymentId, retryCount])
+
+  const payment = data.payment
+  const leaseById = new Map(data.leases.map((lease) => [lease.id, lease]))
+  const eligibleCharges = data.invoices.flatMap((invoice) => {
+    if (invoice.status !== 'issued') return []
+    const lease = leaseById.get(invoice.lease_id)
+    if (!lease || lease.tenant_id !== payment?.tenant_id) return []
+    return invoice.charges
+      .filter((charge) => {
+        const outstandingCents = moneyToCents(charge.outstanding_balance)
+        return outstandingCents !== null && outstandingCents > 0n
+      })
+      .map((charge) => ({ invoice, charge }))
+  })
+  const unallocatedCents = payment ? moneyToCents(payment.unallocated_amount) : null
+  const canAllocate = payment?.currency === 'KES' && unallocatedCents !== null && unallocatedCents > 0n
+
+  async function handleAllocationSubmit(event) {
+    event.preventDefault()
+    setError('')
+    setSuccessMessage('')
+
+    if (!payment || !canAllocate) {
+      setError('This payment has no valid unallocated KES balance.')
+      return
+    }
+
+    const selected = eligibleCharges.filter(({ charge }) => allocations[charge.id]?.selected)
+    if (selected.length === 0) {
+      setError('Select at least one eligible invoice charge.')
+      return
+    }
+
+    let requestedTotal = 0n
+    const requestAllocations = []
+    for (const { charge } of selected) {
+      const amountCents = moneyToCents(allocations[charge.id].amount)
+      const outstandingCents = moneyToCents(charge.outstanding_balance)
+      if (amountCents === null || amountCents === 0n) {
+        setError('Enter a positive allocation amount with no more than two decimal places for each selected charge.')
+        return
+      }
+      if (outstandingCents === null || amountCents > outstandingCents) {
+        setError(`An allocation cannot exceed the outstanding balance of charge ${charge.id}.`)
+        return
+      }
+      requestedTotal += amountCents
+      requestAllocations.push({ charge_id: charge.id, amount: centsToMoney(amountCents) })
+    }
+
+    if (requestedTotal > unallocatedCents) {
+      setError(`The total allocation cannot exceed the remaining payment balance of ${formatKes(payment.unallocated_amount)}.`)
+      return
+    }
+
+    if (savingRef.current) return
+    savingRef.current = true
+    setIsSaving(true)
+    try {
+      const result = await apiRequest(`/api/payments/${encodeURIComponent(payment.id)}/allocations`, {
+        method: 'POST',
+        authenticated: true,
+        body: { allocations: requestAllocations },
+      })
+      if (!result?.payment) {
+        throw new Error('The allocation could not be confirmed. Refresh payment details before trying again.')
+      }
+      setAllocations({})
+      setSuccessMessage(result.message || 'Payment allocation saved successfully.')
+      onAllocated()
+      setRetryCount((count) => count + 1)
+    } catch (requestError) {
+      const status = requestError.status
+      if (status === 400) {
+        setError(`The allocation request was invalid. Review the selected charges and amounts. ${requestError.message}`)
+      } else if (status === 404) {
+        setError(`A selected charge is no longer available for this tenant. Refresh the details and try again. ${requestError.message}`)
+      } else if (status === 409) {
+        setError(`The payment or charge balance changed, or the requested amount exceeds the current balance. Details have been refreshed; review the amounts and try again. ${requestError.message}`)
+        setRetryCount((count) => count + 1)
+      } else {
+        setError(requestError.message || 'Unable to allocate this payment. Please try again.')
+      }
+    } finally {
+      savingRef.current = false
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <section className="payment-detail-page" aria-labelledby="payment-detail-heading">
+      <button className="back-button" type="button" onClick={onBack}>
+        <span aria-hidden="true">←</span> Payment history
+      </button>
+      {data.loading ? (
+        <div className="overview-message" role="status" aria-live="polite">
+          <span className="loading-dot" aria-hidden="true" /> Loading payment details…
+        </div>
+      ) : data.error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Payment details could not be loaded</h4><p>{data.error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : showReceipt ? (
+        <PaymentReceiptView paymentId={paymentId} onBack={() => setShowReceipt(false)} />
+      ) : payment && (
+        <>
+          <div className="management-page-heading detail-heading payment-detail-heading">
+            <div>
+              <p className="eyebrow">{payment.receipt?.receipt_number || `Payment #${payment.id}`}</p>
+              <h2 id="payment-detail-heading">{payment.tenant?.full_name || 'Tenant unavailable'}</h2>
+              <p>Payment received {formatStatementDate(payment.received_at, true)}</p>
+            </div>
+            <div className="payment-detail-actions">
+              <strong className="payment-history-amount">{formatKes(payment.amount)}</strong>
+              <button className="secondary-button compact-button" type="button" onClick={() => setShowReceipt(true)}>
+                View Receipt
+              </button>
+            </div>
+          </div>
+
+          <dl className="payment-detail-meta">
+            <div><dt>Payment method</dt><dd>{formatPaymentMethod(payment.method)}</dd></div>
+            <div><dt>Reference</dt><dd>{payment.reference || 'Not provided'}</dd></div>
+            <div><dt>Receipt number</dt><dd>{payment.receipt?.receipt_number || 'Unavailable'}</dd></div>
+            <div><dt>Total allocated</dt><dd>{formatKes(payment.allocated_amount)}</dd></div>
+            <div><dt>Remaining unallocated</dt><dd>{formatKes(payment.unallocated_amount)}</dd></div>
+          </dl>
+
+          {successMessage && <div className="payment-success" role="status">{successMessage}</div>}
+          {error && <div className="form-error payment-allocation-error" role="alert">{error}</div>}
+
+          <section className="payment-allocation-section" aria-labelledby="payment-allocation-heading">
+            <div className="property-section-heading">
+              <h3 id="payment-allocation-heading">Existing allocations</h3>
+            </div>
+            {payment.allocations.length === 0 ? (
+              <p className="payment-allocation-empty">This payment has not been allocated to any invoice charges.</p>
+            ) : (
+              <ul className="payment-allocation-list">
+                {payment.allocations.map((allocation) => (
+                  <li className="payment-allocation-card" key={allocation.charge_id}>
+                    <div>
+                      <strong>Invoice #{allocation.invoice_id} · {invoiceChargeLabel(allocation.charge_category)}</strong>
+                      <span>
+                        {allocation.charge_description || 'No description'} · {allocation.invoice_period_start} – {allocation.invoice_period_end}
+                      </span>
+                    </div>
+                    <strong>{formatKes(allocation.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {payment.currency !== 'KES' ? (
+            <div className="overview-message overview-error" role="alert">
+              This payment is not in KES and cannot be allocated.
+            </div>
+          ) : !canAllocate ? (
+            <div className="overview-empty compact-empty">
+              <h4>No unallocated balance</h4>
+              <p>This payment has been fully allocated.</p>
+            </div>
+          ) : eligibleCharges.length === 0 ? (
+            <div className="overview-empty compact-empty">
+              <h4>No eligible invoice charges</h4>
+              <p>This tenant has no issued invoice charges with an outstanding balance.</p>
+            </div>
+          ) : (
+            <form className="management-form payment-allocation-form" onSubmit={handleAllocationSubmit} noValidate aria-labelledby="payment-allocation-form-heading">
+              <div className="management-form-heading payment-allocation-form-heading">
+                <div>
+                  <h3 id="payment-allocation-form-heading">Allocate payment</h3>
+                  <p>Remaining payment balance: <strong>{formatKes(payment.unallocated_amount)}</strong></p>
+                </div>
+              </div>
+              <ul className="payment-eligible-charge-list">
+                {eligibleCharges.map(({ invoice, charge }) => {
+                  const draft = allocations[charge.id] || { selected: false, amount: '' }
+                  return (
+                    <li className="payment-eligible-charge" key={charge.id}>
+                      <label className="payment-charge-select">
+                        <input
+                          type="checkbox"
+                          checked={draft.selected}
+                          disabled={isSaving}
+                          onChange={(event) => {
+                            setError('')
+                            setAllocations((current) => ({
+                              ...current,
+                              [charge.id]: {
+                                selected: event.target.checked,
+                                amount: event.target.checked ? current[charge.id]?.amount || '' : '',
+                              },
+                            }))
+                          }}
+                        />
+                        <span>
+                          <strong>Invoice #{invoice.id} · {invoiceChargeLabel(invoice.purpose)}</strong>
+                          <span>{invoice.period_start} – {invoice.period_end}</span>
+                          <span>{invoiceChargeLabel(charge.category)}{charge.description ? ` · ${charge.description}` : ''}</span>
+                          <span>Outstanding: {formatKes(charge.outstanding_balance)}</span>
+                        </span>
+                      </label>
+                      <div className="field-group payment-allocation-amount">
+                        <label htmlFor={`payment-allocation-${charge.id}`}>Allocate (KES)</label>
+                        <input
+                          id={`payment-allocation-${charge.id}`}
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={draft.amount}
+                          disabled={isSaving || !draft.selected}
+                          onChange={(event) => {
+                            setError('')
+                            setAllocations((current) => ({
+                              ...current,
+                              [charge.id]: {
+                                selected: current[charge.id]?.selected || false,
+                                amount: event.target.value,
+                              },
+                            }))
+                          }}
+                        />
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="payment-allocation-submit">
+                <button className="primary-button compact-button" type="submit" disabled={isSaving}>
+                  {isSaving ? 'Allocating…' : 'Allocate payment'}
+                </button>
+              </div>
+            </form>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function PaymentsPage() {
+  const [data, setData] = useState({ loading: true, payments: [], error: '' })
+  const [retryCount, setRetryCount] = useState(0)
+  const [showRecordForm, setShowRecordForm] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
+  const [selectedPaymentId, setSelectedPaymentId] = useState(null)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function fetchPayments() {
+      setData((current) => ({ ...current, loading: true, error: '' }))
+      try {
+        const result = await apiRequest('/api/payments', { authenticated: true })
+        if (!Array.isArray(result?.payments)) {
+          throw new Error('The payment history could not be read. Please try again.')
+        }
+        if (isCurrent) setData({ loading: false, payments: result.payments, error: '' })
+      } catch (error) {
+        if (isCurrent) {
+          setData((current) => ({
+            ...current,
+            loading: false,
+            error: error.message || 'Unable to load payment history.',
+          }))
+        }
+      }
+    }
+
+    fetchPayments()
+    return () => { isCurrent = false }
+  }, [retryCount])
+
+  const { loading, payments, error } = data
+
+  function paymentCreated(payment) {
+    const receiptNumber = payment.receipt?.receipt_number
+    setSuccessMessage(
+      receiptNumber
+        ? `Payment recorded successfully. Receipt ${receiptNumber}.`
+        : 'Payment recorded successfully.',
+    )
+    setShowRecordForm(false)
+    setRetryCount((count) => count + 1)
+  }
+
+  return (
+    <section className="management-page" aria-labelledby="payments-page-heading">
+      <div className="management-page-heading">
+        <div>
+          <p className="eyebrow">Transactions</p>
+          <h2 id="payments-page-heading">Payments</h2>
+          <p>Review payments received from your tenants and how they have been allocated.</p>
+        </div>
+        {selectedPaymentId === null && (
+          <button
+            className="primary-button compact-button"
+            type="button"
+            onClick={() => {
+              setSuccessMessage('')
+              setShowRecordForm((visible) => !visible)
+            }}
+          >
+            {showRecordForm ? 'Close form' : 'Record Payment'}
+          </button>
+        )}
+      </div>
+
+      {selectedPaymentId !== null ? (
+        <PaymentDetailsPage
+          paymentId={selectedPaymentId}
+          onBack={() => setSelectedPaymentId(null)}
+          onAllocated={() => setRetryCount((count) => count + 1)}
+        />
+      ) : (
+        <>
+          {successMessage && <div className="payment-success" role="status">{successMessage}</div>}
+          {showRecordForm && (
+            <PaymentForm
+              onCancel={() => setShowRecordForm(false)}
+              onCreated={paymentCreated}
+            />
+          )}
+          {loading ? (
+        <div className="overview-message" role="status" aria-live="polite">
+          <span className="loading-dot" aria-hidden="true" /> Loading payment history…
+        </div>
+      ) : error ? (
+        <div className="overview-message overview-error" role="alert">
+          <div><h4>Payment history could not be loaded</h4><p>{error}</p></div>
+          <button className="retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : payments.length === 0 ? (
+        <div className="overview-empty compact-empty">
+          <h4>No payments yet</h4>
+          <p>Payments received from your tenants will appear here.</p>
+        </div>
+      ) : (
+        <ul className="payment-history-list" aria-label="Payment history">
+          {payments.map((payment) => (
+            <li key={payment.id}>
+              <button
+                className="payment-history-card payment-history-select"
+                type="button"
+                onClick={() => {
+                  setShowRecordForm(false)
+                  setSuccessMessage('')
+                  setSelectedPaymentId(payment.id)
+                }}
+              >
+                <div className="payment-history-heading">
+                  <div className="payment-history-identity">
+                    <span className="payment-history-receipt">
+                      {payment.receipt?.receipt_number || `Payment #${payment.id}`}
+                    </span>
+                    <h3>{payment.tenant?.full_name || 'Tenant unavailable'}</h3>
+                  </div>
+                  <strong className="payment-history-amount">{formatKes(payment.amount)}</strong>
+                </div>
+                <dl className="payment-history-details">
+                  <div><dt>Payment method</dt><dd>{formatPaymentMethod(payment.method)}</dd></div>
+                  <div><dt>Reference</dt><dd>{payment.reference || 'Not provided'}</dd></div>
+                  <div><dt>Date received</dt><dd>{formatStatementDate(payment.received_at, true)}</dd></div>
+                  <div><dt>Allocated</dt><dd>{formatKes(payment.allocated_amount ?? '0.00')}</dd></div>
+                  <div><dt>Unallocated</dt><dd>{formatKes(payment.unallocated_amount ?? payment.amount)}</dd></div>
+                </dl>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function DashboardShell({ user }) {
   const { logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2730,24 +3511,18 @@ function DashboardShell({ user }) {
         </a>
         <p className="sidebar-label">Workspace</p>
         <nav id="workspace-navigation" aria-label="Workspace">
-          {navigationItems.map((item) => item.available ? (
+          {navigationItems.map((label) => (
             <button
-              className={`nav-item${page === item.label ? ' is-active' : ''}`}
+              className={`nav-item${page === label ? ' is-active' : ''}`}
               type="button"
-              key={item.label}
-              aria-current={page === item.label ? 'page' : undefined}
-              ref={page === item.label ? activeNavRef : undefined}
-              onClick={() => navigateTo(item.label)}
+              key={label}
+              aria-current={page === label ? 'page' : undefined}
+              ref={page === label ? activeNavRef : undefined}
+              onClick={() => navigateTo(label)}
             >
               <span className="nav-indicator" aria-hidden="true" />
-              {item.label}
+              {label}
             </button>
-          ) : (
-            <div className="nav-item is-unavailable" key={item.label} aria-disabled="true">
-              <span className="nav-indicator" aria-hidden="true" />
-              <span>{item.label}</span>
-              <span className="nav-status">Soon</span>
-            </div>
           ))}
         </nav>
         <div className="sidebar-footer">Property management</div>
@@ -2806,8 +3581,10 @@ function DashboardShell({ user }) {
             <InvoicesPage purpose="utilities" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
           ) : page === 'Other Invoices' ? (
             <InvoicesPage purpose="other" selectedInvoiceId={selectedInvoiceId} setSelectedInvoiceId={setSelectedInvoiceId} />
+          ) : page === 'Payments' ? (
+            <PaymentsPage />
           ) : (
-            <LeasesPage />
+            null
           )}
         </main>
       </div>
