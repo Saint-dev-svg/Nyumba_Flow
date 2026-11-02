@@ -999,6 +999,96 @@ button.nav-item {
   font-weight: 550;
 }
 
+.tenant-lease-section {
+  margin-top: 27px;
+}
+
+.tenant-lease-section .property-section-heading {
+  margin-bottom: 12px;
+}
+
+.tenant-lease-section .property-section-heading h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 620;
+}
+
+.tenant-lease-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-lease-card {
+  min-width: 0;
+  padding: 17px 19px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.tenant-lease-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tenant-lease-card-heading h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.tenant-lease-card-heading p {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tenant-lease-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--color-border);
+}
+
+.tenant-lease-meta dt {
+  margin-bottom: 5px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.tenant-lease-meta dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.tenant-lease-empty {
+  margin: 0;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.tenant-lease-loading,
+.tenant-lease-error {
+  margin-top: 20px;
+}
+
 .optional-label {
   margin-left: 4px;
   color: var(--color-muted);
@@ -3588,6 +3678,14 @@ button.nav-item {
 
   .payment-detail-meta > div:last-child {
     border-bottom: 0;
+  }
+
+  .tenant-lease-card {
+    padding: 15px;
+  }
+
+  .tenant-lease-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

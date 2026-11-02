@@ -688,6 +688,29 @@ function TenantForm({ tenant, onCancel, onSaved }) {
   )
 }
 
+function TenantLeaseCard({ lease, unit, property, today }) {
+  const isScheduled = !lease.is_active && lease.start_date > today
+
+  return (
+    <article className="tenant-lease-card">
+      <div className="tenant-lease-card-heading">
+        <div>
+          <h4>{property?.name || 'Property unavailable'}</h4>
+          <p>{property?.address || 'Address unavailable'} · Unit {unit?.unit_number || 'Unavailable'}</p>
+        </div>
+        <span className={`status-pill${lease.is_active ? ' is-active' : ''}`}>
+          {lease.is_active ? 'Current' : isScheduled ? 'Scheduled' : 'Inactive'}
+        </span>
+      </div>
+      <dl className="tenant-lease-meta">
+        <div><dt>Lease start</dt><dd>{formatStatementDate(lease.start_date)}</dd></div>
+        <div><dt>Lease end</dt><dd>{lease.end_date ? formatStatementDate(lease.end_date) : 'No end date'}</dd></div>
+        <div><dt>Monthly rent</dt><dd>{formatKes(lease.monthly_rent)}</dd></div>
+      </dl>
+    </article>
+  )
+}
+
 function TenantsPage() {
   const [tenants, setTenants] = useState([])
   const [leases, setLeases] = useState([])
@@ -702,6 +725,14 @@ function TenantsPage() {
   const [listReload, setListReload] = useState(0)
   const [detailReload, setDetailReload] = useState(0)
   const [showStatement, setShowStatement] = useState(false)
+  const [leaseContext, setLeaseContext] = useState({
+    loading: false,
+    properties: [],
+    units: [],
+    error: '',
+  })
+  const [leaseContextRetry, setLeaseContextRetry] = useState(0)
+  const leaseContextCache = useRef(null)
 
   useEffect(() => {
     let isCurrent = true
@@ -747,6 +778,54 @@ function TenantsPage() {
     return () => { isCurrent = false }
   }, [selectedTenantId, detailReload])
 
+  useEffect(() => {
+    if (selectedTenantId === null) return undefined
+    if (!leases.some((lease) => lease.tenant_id === selectedTenantId)) return undefined
+    let isCurrent = true
+
+    async function fetchLeaseContext() {
+      setLeaseContext({ loading: true, properties: [], units: [], error: '' })
+      let contextPromise = leaseContextCache.current
+      try {
+        if (!contextPromise) {
+          contextPromise = (async () => {
+            const propertyResult = await apiRequest('/api/properties', { authenticated: true })
+            if (!Array.isArray(propertyResult?.properties)) {
+              throw new Error('Property information could not be read. Please try again.')
+            }
+            const unitResults = await Promise.all(propertyResult.properties.map(async (property) => {
+              const result = await apiRequest(
+                `/api/properties/${encodeURIComponent(property.id)}/units`,
+                { authenticated: true },
+              )
+              if (!Array.isArray(result?.units)) {
+                throw new Error('Unit information could not be read. Please try again.')
+              }
+              return result.units
+            }))
+            return { properties: propertyResult.properties, units: unitResults.flat() }
+          })()
+          leaseContextCache.current = contextPromise
+        }
+        const context = await contextPromise
+        if (isCurrent) setLeaseContext({ loading: false, ...context, error: '' })
+      } catch (error) {
+        if (leaseContextCache.current === contextPromise) leaseContextCache.current = null
+        if (isCurrent) {
+          setLeaseContext({
+            loading: false,
+            properties: [],
+            units: [],
+            error: error.message || 'Unable to load lease and property information.',
+          })
+        }
+      }
+    }
+
+    fetchLeaseContext()
+    return () => { isCurrent = false }
+  }, [selectedTenantId, leaseContextRetry, leases])
+
   function tenantSaved() {
     setShowCreateForm(false)
     setIsEditing(false)
@@ -757,6 +836,7 @@ function TenantsPage() {
   function closeTenantDetails() {
     setSelectedTenantId(null)
     setTenantDetails({ loading: false, tenant: null, error: '' })
+    setLeaseContext({ loading: false, properties: [], units: [], error: '' })
     setIsEditing(false)
     setShowStatement(false)
   }
@@ -779,6 +859,13 @@ function TenantsPage() {
   })
 
   if (selectedTenantId !== null) {
+    const tenantLeases = leases.filter((lease) => lease.tenant_id === selectedTenantId)
+    const activeLeases = tenantLeases.filter((lease) => lease.is_active)
+    const inactiveLeases = tenantLeases.filter((lease) => !lease.is_active)
+    const propertiesById = new Map(leaseContext.properties.map((property) => [property.id, property]))
+    const unitsById = new Map(leaseContext.units.map((unit) => [unit.id, unit]))
+    const today = localDateString(new Date())
+
     return (
       <section className="management-page" aria-labelledby="tenant-detail-heading">
         <button className="back-button" type="button" onClick={closeTenantDetails}>
@@ -809,12 +896,82 @@ function TenantsPage() {
             {isEditing ? (
               <TenantForm tenant={tenantDetails.tenant} onCancel={() => setIsEditing(false)} onSaved={tenantSaved} />
             ) : (
-              <dl className="tenant-detail-card">
-                <div><dt>Full name</dt><dd>{tenantDetails.tenant.full_name}</dd></div>
-                <div><dt>Email address</dt><dd>{tenantDetails.tenant.email}</dd></div>
-                <div><dt>Phone number</dt><dd>{tenantDetails.tenant.phone_number || 'Not provided'}</dd></div>
-                <div><dt>National ID last four</dt><dd>{tenantDetails.tenant.national_id_last4 || 'Not provided'}</dd></div>
-              </dl>
+              <>
+                <dl className="tenant-detail-card">
+                  <div><dt>Full name</dt><dd>{tenantDetails.tenant.full_name}</dd></div>
+                  <div><dt>Email address</dt><dd>{tenantDetails.tenant.email}</dd></div>
+                  <div><dt>Phone number</dt><dd>{tenantDetails.tenant.phone_number || 'Not provided'}</dd></div>
+                  <div><dt>National ID last four</dt><dd>{tenantDetails.tenant.national_id_last4 || 'Not provided'}</dd></div>
+                </dl>
+                {tenantLeases.length === 0 ? (
+                  <section className="tenant-lease-section" aria-labelledby="tenant-current-leases-heading">
+                    <div className="property-section-heading">
+                      <div>
+                        <p className="eyebrow">Active agreements</p>
+                        <h3 id="tenant-current-leases-heading">Current leases</h3>
+                      </div>
+                    </div>
+                    <p className="tenant-lease-empty">No current or historical leases are recorded for this tenant.</p>
+                  </section>
+                ) : leaseContext.loading ? (
+                  <div className="overview-message tenant-lease-loading" role="status" aria-live="polite">
+                    <span className="loading-dot" aria-hidden="true" />
+                    Loading lease and property information…
+                  </div>
+                ) : leaseContext.error ? (
+                  <div className="overview-message overview-error tenant-lease-error" role="alert">
+                    <div><h4>Lease information could not be loaded</h4><p>{leaseContext.error}</p></div>
+                    <button className="retry-button" type="button" onClick={() => setLeaseContextRetry((count) => count + 1)}>Try again</button>
+                  </div>
+                ) : (
+                  <>
+                    <section className="tenant-lease-section" aria-labelledby="tenant-current-leases-heading">
+                      <div className="property-section-heading">
+                        <div>
+                          <p className="eyebrow">Active agreements</p>
+                          <h3 id="tenant-current-leases-heading">Current lease{activeLeases.length === 1 ? '' : 's'}</h3>
+                        </div>
+                      </div>
+                      {activeLeases.length === 0 ? (
+                        <p className="tenant-lease-empty">No current active leases.</p>
+                      ) : (
+                        <ul className="tenant-lease-list">
+                          {activeLeases.map((lease) => {
+                            const unit = unitsById.get(lease.unit_id)
+                            const property = unit ? propertiesById.get(unit.property_id) : null
+                            return (
+                              <li key={lease.id}>
+                                <TenantLeaseCard lease={lease} unit={unit} property={property} today={today} />
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                    </section>
+                    {inactiveLeases.length > 0 && (
+                      <section className="tenant-lease-section" aria-labelledby="tenant-lease-history-heading">
+                        <div className="property-section-heading">
+                          <div>
+                            <p className="eyebrow">Previous or scheduled agreements</p>
+                            <h3 id="tenant-lease-history-heading">Lease history</h3>
+                          </div>
+                        </div>
+                        <ul className="tenant-lease-list">
+                          {inactiveLeases.map((lease) => {
+                            const unit = unitsById.get(lease.unit_id)
+                            const property = unit ? propertiesById.get(unit.property_id) : null
+                            return (
+                              <li key={lease.id}>
+                                <TenantLeaseCard lease={lease} unit={unit} property={property} today={today} />
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </section>
+                    )}
+                  </>
+                )}
+              </>
             )}
           </>
         )}
@@ -899,7 +1056,14 @@ function TenantsPage() {
             <ul className="tenant-list">
               {filteredTenants.map((tenant) => (
                 <li key={tenant.id}>
-                  <button className="tenant-list-card" type="button" onClick={() => setSelectedTenantId(tenant.id)}>
+                  <button
+                    className="tenant-list-card"
+                    type="button"
+                    onClick={() => {
+                      setLeaseContext({ loading: false, properties: [], units: [], error: '' })
+                      setSelectedTenantId(tenant.id)
+                    }}
+                  >
                     <span className="tenant-avatar" aria-hidden="true">{tenant.full_name.trim().charAt(0).toUpperCase()}</span>
                     <span className="tenant-list-details">
                       <strong>{tenant.full_name}</strong>
