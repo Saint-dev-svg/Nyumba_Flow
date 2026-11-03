@@ -197,6 +197,112 @@ def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_
     }
 
 
+@pytest.mark.parametrize(
+    "term",
+    ["M-PESA", "mpesa", "Safaricom", "exe", "exec", "cmd", "sql", "query"],
+)
+@pytest.mark.parametrize("location", ["hostname", "base_path"])
+def test_restricted_callback_keyword_is_rejected_without_request(
+    monkeypatch, app, registration_setup, term, location
+):
+    set_sandbox(monkeypatch)
+    if location == "hostname":
+        base_url = f"https://{term}.example.test"
+    else:
+        base_url = f"https://example.test/{term}/gateway"
+    monkeypatch.setenv("MPESA_CALLBACK_BASE_URL", base_url)
+    mock_oauth(monkeypatch)
+    request_sent = False
+
+    def fake_urlopen(request, timeout):
+        nonlocal request_sent
+        request_sent = True
+        raise AssertionError("Rejected callback URLs must not send HTTP.")
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == (
+        "A callback URL contains a restricted keyword."
+    )
+    assert not request_sent
+
+
+@pytest.mark.parametrize(
+    "term",
+    ["M-pEsA", "MpEsA", "sAfArIcOm", "eXe", "ExEc", "CmD", "sQl", "QuErY"],
+)
+def test_restricted_callback_keyword_matching_is_case_insensitive(
+    monkeypatch, app, registration_setup, term
+):
+    set_sandbox(monkeypatch)
+    monkeypatch.setenv(
+        "MPESA_CALLBACK_BASE_URL", f"https://example.test/gateway/{term}"
+    )
+    mock_oauth(monkeypatch)
+    request_sent = False
+
+    def fake_urlopen(request, timeout):
+        nonlocal request_sent
+        request_sent = True
+        raise AssertionError("Rejected callback URLs must not send HTTP.")
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    assert response.status_code == 400
+    assert not request_sent
+
+
+@pytest.mark.parametrize("restricted_callback", ["validation", "confirmation"])
+def test_each_generated_callback_url_is_checked(
+    monkeypatch, app, registration_setup, restricted_callback
+):
+    set_sandbox(monkeypatch)
+    mock_oauth(monkeypatch)
+    callback_urls = {
+        "validation": "https://example.test/api/c2b/validation",
+        "confirmation": "https://example.test/api/c2b/confirmation",
+    }
+    callback_urls[restricted_callback] = (
+        f"https://example.test/api/{'M-PESA'}/"
+        f"{restricted_callback}"
+    )
+    monkeypatch.setattr(
+        mpesa_registration,
+        "_callback_urls",
+        lambda configuration_id: (
+            callback_urls["validation"],
+            callback_urls["confirmation"],
+        ),
+    )
+    request_sent = False
+
+    def fake_urlopen(request, timeout):
+        nonlocal request_sent
+        request_sent = True
+        raise AssertionError("Rejected callback URLs must not send HTTP.")
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    assert response.status_code == 400
+    assert not request_sent
+
+
 def test_oauth_failure_is_sanitized(monkeypatch, app, registration_setup):
     set_sandbox(monkeypatch)
     monkeypatch.setattr(

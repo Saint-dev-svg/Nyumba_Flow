@@ -14,6 +14,16 @@ SANDBOX_REGISTER_URL = (
 REQUEST_TIMEOUT_SECONDS = 10
 MAX_RESPONSE_BYTES = 64 * 1024
 RESPONSE_TYPE = "Completed"
+RESTRICTED_CALLBACK_URL_TERMS = (
+    "M-PESA",
+    "mpesa",
+    "Safaricom",
+    "exe",
+    "exec",
+    "cmd",
+    "sql",
+    "query",
+)
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -97,6 +107,18 @@ def _callback_urls(configuration_id, base_url=None):
     )
 
 
+def _validate_callback_urls(validation_url, confirmation_url):
+    for callback_url in (validation_url, confirmation_url):
+        normalized_url = callback_url.casefold()
+        if any(
+            term.casefold() in normalized_url
+            for term in RESTRICTED_CALLBACK_URL_TERMS
+        ):
+            raise DarajaRegistrationConfigurationError(
+                "A callback URL contains a restricted keyword."
+            )
+
+
 def _provider_response(response_body):
     if len(response_body) > MAX_RESPONSE_BYTES:
         raise DarajaRegistrationResponseError(
@@ -177,6 +199,7 @@ def register_c2b_urls(configuration):
         )
 
     validation_url, confirmation_url = _callback_urls(configuration.id)
+    _validate_callback_urls(validation_url, confirmation_url)
     payload = {
         "ShortCode": configuration.business_shortcode,
         "ResponseType": RESPONSE_TYPE,
