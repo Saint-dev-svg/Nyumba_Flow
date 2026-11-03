@@ -60,11 +60,13 @@ class DarajaRegistrationRequestError(DarajaRegistrationError):
         provider_http_status=None,
         provider_error_code=None,
         provider_message=None,
+        provider_request_id=None,
     ):
         super().__init__(message)
         self.provider_http_status = provider_http_status
         self.provider_error_code = provider_error_code
         self.provider_message = provider_message
+        self.provider_request_id = provider_request_id
 
 
 class DarajaRegistrationTimeoutError(DarajaRegistrationRequestError):
@@ -162,30 +164,33 @@ def _sanitize_provider_error_value(value, max_length, sensitive_values):
 
 def _provider_http_error_details(response_body, configuration, access_token):
     if not response_body or len(response_body) > MAX_RESPONSE_BYTES:
-        return None, None
+        return None, None, None
     try:
         payload = json.loads(response_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return None, None
+        return None, None, None
 
-    approved_fields = {"errorCode", "errorMessage"}
+    approved_fields = {"errorCode", "errorMessage", "requestId"}
     if (
         not isinstance(payload, dict)
         or not payload
         or not set(payload).issubset(approved_fields)
     ):
-        return None, None
+        return None, None, None
 
     error_code = payload.get("errorCode")
     error_message = payload.get("errorMessage")
+    request_id = payload.get("requestId")
     if (
         ("errorCode" in payload and (
             not isinstance(error_code, (str, int))
             or isinstance(error_code, bool)
         ))
         or ("errorMessage" in payload and not isinstance(error_message, str))
+        or ("requestId" in payload and not isinstance(request_id, (str, int)))
+        or isinstance(request_id, bool)
     ):
-        return None, None
+        return None, None, None
 
     sensitive_values = [
         configuration.business_shortcode,
@@ -212,9 +217,18 @@ def _provider_http_error_details(response_body, configuration, access_token):
         if error_message is not None
         else None
     )
-    if sanitized_code is None and sanitized_message is None:
-        return None, None
-    return sanitized_code, sanitized_message
+    sanitized_request_id = (
+        _sanitize_provider_error_value(request_id, 128, sensitive_values)
+        if request_id is not None
+        else None
+    )
+    if (
+        sanitized_code is None
+        and sanitized_message is None
+        and sanitized_request_id is None
+    ):
+        return None, None, None
+    return sanitized_code, sanitized_message, sanitized_request_id
 
 
 def _provider_response(response_body):
@@ -332,16 +346,17 @@ def register_c2b_urls(configuration):
             error_body = b""
         finally:
             error.close()
-        provider_error_code, provider_message = _provider_http_error_details(
-            error_body,
-            configuration,
-            access_token,
-        )
+        (
+            provider_error_code,
+            provider_message,
+            provider_request_id,
+        ) = _provider_http_error_details(error_body, configuration, access_token)
         raise DarajaRegistrationRequestError(
             f"Safaricom returned HTTP {error.code} during URL registration.",
             provider_http_status=error.code,
             provider_error_code=provider_error_code,
             provider_message=provider_message,
+            provider_request_id=provider_request_id,
         ) from None
     except (TimeoutError, socket.timeout):
         raise DarajaRegistrationTimeoutError(

@@ -335,6 +335,7 @@ def test_provider_http_error_includes_sanitized_details(
         body = json.dumps({
             "errorCode": "REGISTRATION_FAILED",
             "errorMessage": "The registration request was rejected.",
+            "requestId": "request-123456",
         }).encode("utf-8")
         raise HTTPError(
             request.full_url,
@@ -359,6 +360,7 @@ def test_provider_http_error_includes_sanitized_details(
     assert result["provider_http_status"] == status_code
     assert result["provider_error_code"] == "REGISTRATION_FAILED"
     assert result["provider_message"] == "The registration request was rejected."
+    assert result["provider_request_id"] == "request-123456"
 
 
 @pytest.mark.parametrize("body", [b"not-json", b"", b"[]", b'{"detail":"internal"}'])
@@ -390,6 +392,7 @@ def test_provider_http_error_with_unusable_body_falls_back_to_generic_error(
     assert result["provider_http_status"] == 500
     assert result["provider_error_code"] is None
     assert result["provider_message"] is None
+    assert result["provider_request_id"] is None
 
 
 def test_provider_http_error_redacts_sensitive_values(
@@ -413,6 +416,10 @@ def test_provider_http_error_redacts_sensitive_values(
         body = json.dumps({
             "errorCode": "REGISTRATION_FAILED",
             "errorMessage": message,
+            "requestId": (
+                f"request-{consumer_key}-{consumer_secret}-{token}-"
+                f"{registration_setup['shortcode']}"
+            ),
         }).encode("utf-8")
         raise HTTPError(
             request.full_url,
@@ -439,6 +446,36 @@ def test_provider_http_error_redacts_sensitive_values(
     ):
         assert sensitive_value not in response_text
     assert "[redacted]" in response.get_json()["provider_message"]
+    request_id = response.get_json()["provider_request_id"]
+    assert len(request_id) <= 128
+    assert "[redacted]" in request_id
+
+
+def test_provider_request_id_is_bounded(monkeypatch, app, registration_setup):
+    set_sandbox(monkeypatch)
+    mock_oauth(monkeypatch)
+
+    def fake_urlopen(request, timeout):
+        body = json.dumps({
+            "requestId": "r" * 200,
+        }).encode("utf-8")
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Provider error",
+            {},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    assert response.status_code == 502
+    assert response.get_json()["provider_request_id"] == "r" * 128
 
 
 def test_provider_http_error_with_sensitive_fields_uses_generic_error(
@@ -451,6 +488,7 @@ def test_provider_http_error_with_sensitive_fields_uses_generic_error(
         body = json.dumps({
             "errorCode": "REGISTRATION_FAILED",
             "errorMessage": "Request failed.",
+            "requestId": "request-123456",
             "consumerSecret": "must-not-be-returned",
             "access_token": "must-not-be-returned",
         }).encode("utf-8")
@@ -472,6 +510,7 @@ def test_provider_http_error_with_sensitive_fields_uses_generic_error(
     result = response.get_json()
     assert result["provider_error_code"] is None
     assert result["provider_message"] is None
+    assert result["provider_request_id"] is None
     assert "must-not-be-returned" not in response.get_data(as_text=True)
 
 

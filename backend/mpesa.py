@@ -451,6 +451,7 @@ def register_paybill_urls(property_id, configuration_id):
             "provider_http_status": error.provider_http_status,
             "provider_error_code": error.provider_error_code,
             "provider_message": error.provider_message,
+            "provider_request_id": error.provider_request_id,
         }), 502
     except DarajaRegistrationResponseError as error:
         return jsonify({"success": False, "error": str(error)}), 502
