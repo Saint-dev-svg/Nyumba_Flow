@@ -3818,6 +3818,9 @@ function PayBillSettings({ propertyId }) {
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
+  const [registrationState, setRegistrationState] = useState(null)
+  const [registeringConfigurationId, setRegisteringConfigurationId] = useState(null)
+  const registrationInProgress = useRef(false)
 
   useEffect(() => {
     let isCurrent = true
@@ -3883,6 +3886,44 @@ function PayBillSettings({ propertyId }) {
       setRetryCount((count) => count + 1)
     } catch (error) {
       setActionError(error.message || 'Unable to update PayBill configuration.')
+    }
+  }
+
+  async function registerConfiguration(configuration) {
+    if (registrationInProgress.current || !configuration.is_active) return
+    const confirmed = window.confirm(
+      'Register this PayBill callback configuration with Safaricom Daraja Sandbox? ' +
+      'This does not verify callback delivery or payments.',
+    )
+    if (!confirmed) return
+
+    registrationInProgress.current = true
+    setRegistrationState(null)
+    setRegisteringConfigurationId(configuration.id)
+    try {
+      const result = await apiRequest(
+        `/api/properties/${encodeURIComponent(propertyId)}/mpesa-paybill/${encodeURIComponent(configuration.id)}/register-url`,
+        { method: 'POST', authenticated: true },
+      )
+      if (result?.success !== true) {
+        throw new Error('Safaricom did not confirm the sandbox registration.')
+      }
+      setRegistrationState({
+        configurationId: configuration.id,
+        type: 'success',
+        message: 'Safaricom accepted this sandbox callback registration request. This does not verify callback delivery or payments.',
+      })
+    } catch (error) {
+      setRegistrationState({
+        configurationId: configuration.id,
+        type: 'error',
+        message: error instanceof Error && error.message
+          ? error.message
+          : 'Unable to register callback URLs with Safaricom Sandbox.',
+      })
+    } finally {
+      registrationInProgress.current = false
+      setRegisteringConfigurationId(null)
     }
   }
 
@@ -3963,7 +4004,34 @@ function PayBillSettings({ propertyId }) {
                   <small>No connection check has been performed.</small>
                 </div>
               </dl>
+              {registrationState?.configurationId === configuration.id && (
+                <div
+                  className={registrationState.type === 'success' ? 'payment-success' : 'form-error'}
+                  role={registrationState.type === 'success' ? 'status' : 'alert'}
+                >
+                  {registrationState.message}
+                </div>
+              )}
               <div className="paybill-card-actions">
+                <div className="paybill-registration-action">
+                  <button
+                    className="primary-button compact-button paybill-register-button"
+                    type="button"
+                    disabled={
+                      !configuration.is_active
+                      || registeringConfigurationId !== null
+                      || saving
+                    }
+                    onClick={() => registerConfiguration(configuration)}
+                  >
+                    {registeringConfigurationId === configuration.id
+                      ? 'Registering…'
+                      : 'Register with Safaricom'}
+                  </button>
+                  <small>
+                    Sandbox registration only. It does not confirm payment processing.
+                  </small>
+                </div>
                 <button
                   className="text-button"
                   type="button"

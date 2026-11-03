@@ -1034,6 +1034,25 @@ button.nav-item {
   gap: 10px;
 }
 
+.paybill-registration-action {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.paybill-register-button {
+  width: auto;
+  min-height: 41px;
+  margin: 0;
+}
+
+.paybill-registration-action small {
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .mpesa-transaction-heading strong {
   color: var(--color-text);
   font-size: 14px;
