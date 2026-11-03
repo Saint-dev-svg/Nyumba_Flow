@@ -198,6 +198,31 @@ def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_
     }
 
 
+def test_https_callback_base_url_is_accepted():
+    validation_url, confirmation_url = mpesa_registration._callback_urls(
+        123, "https://callbacks.example.test/root/"
+    )
+
+    assert validation_url == (
+        "https://callbacks.example.test/root/api/integrations/daraja/c2b/"
+        "123/validation"
+    )
+    assert confirmation_url == (
+        "https://callbacks.example.test/root/api/integrations/daraja/c2b/"
+        "123/confirmation"
+    )
+
+
+def test_http_callback_base_url_is_rejected():
+    with pytest.raises(
+        mpesa_registration.DarajaRegistrationConfigurationError,
+        match="absolute HTTPS URL",
+    ):
+        mpesa_registration._callback_urls(
+            123, "http://callbacks.example.test"
+        )
+
+
 @pytest.mark.parametrize(
     "term",
     ["M-PESA", "mpesa", "Safaricom", "exe", "exec", "cmd", "sql", "query"],

@@ -1,6 +1,7 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from decimal import Decimal
 from threading import Barrier
 
 import pytest
@@ -168,8 +169,9 @@ def callback_payload(
     reference="A1",
     amount="15000.00",
     transaction_time="20261106123000",
+    currency=None,
 ):
-    return {
+    payload = {
         "TransID": transaction_id,
         "TransAmount": amount,
         "BusinessShortCode": shortcode,
@@ -178,6 +180,9 @@ def callback_payload(
         "TransactionType": "Pay Bill",
         "ThirdPartyTransID": "invoice-ref",
     }
+    if currency is not None:
+        payload["Currency"] = currency
+    return payload
 
 
 def post_callback(client, configuration_id, payload):
@@ -406,28 +411,77 @@ def test_callback_does_not_change_invoice_or_create_financial_records(
         ) == original_counts
 
 
-def test_callback_duplicate_is_idempotent(app, channel):
+def test_exact_duplicate_callback_is_idempotent(app, channel):
+    payload = callback_payload(transaction_id="QK-DUPLICATE")
     with app.test_client() as client:
         first = post_callback(
             client,
             channel["configuration_id"],
-            callback_payload(transaction_id="QK-DUPLICATE"),
+            payload,
         )
         second = post_callback(
             client,
             channel["configuration_id"],
-            callback_payload(
-                transaction_id="QK-DUPLICATE",
-                reference="OTHER",
-                amount="1.00",
-            ),
+            payload,
         )
     assert first.status_code == 200
     assert second.status_code == 200
+    assert second.get_json()["ResultCode"] == 0
     with app.app_context():
-        assert MpesaCallbackTransaction.query.filter_by(
+        transactions = MpesaCallbackTransaction.query.filter_by(
             provider_transaction_id="QK-DUPLICATE"
-        ).count() == 1
+        ).all()
+        assert len(transactions) == 1
+        assert transactions[0].processing_status == "matched"
+        assert transactions[0].account_reference == "A1"
+        assert transactions[0].amount == Decimal("15000.00")
+
+
+@pytest.mark.parametrize(
+    "changed_field,changed_value",
+    [
+        ("amount", "1.00"),
+        ("reference", "OTHER"),
+        ("shortcode", "600999"),
+        ("transaction_time", "20261106123100"),
+        ("currency", "USD"),
+    ],
+)
+def test_conflicting_duplicate_callback_is_rejected_without_overwriting_original(
+    app, channel, changed_field, changed_value
+):
+    original_payload = callback_payload(transaction_id="QK-CONFLICT")
+    changed_payload = callback_payload(
+        transaction_id="QK-CONFLICT",
+        **{changed_field: changed_value},
+    )
+    with app.test_client() as client:
+        first = post_callback(
+            client, channel["configuration_id"], original_payload
+        )
+        conflict = post_callback(
+            client, channel["configuration_id"], changed_payload
+        )
+    assert first.status_code == 200
+    assert conflict.status_code == 200
+    assert conflict.get_json() == {
+        "ResultCode": 1,
+        "ResultDesc": "Conflicting duplicate transaction",
+    }
+
+    with app.app_context():
+        transactions = MpesaCallbackTransaction.query.filter_by(
+            provider_transaction_id="QK-CONFLICT"
+        ).all()
+        assert len(transactions) == 1
+        transaction = transactions[0]
+        assert transaction.business_shortcode == "600111"
+        assert transaction.account_reference == "A1"
+        assert transaction.amount == Decimal("15000.00")
+        assert transaction.provider_transaction_at.strftime(
+            "%Y%m%d%H%M%S"
+        ) == "20261106123000"
+        assert transaction.currency == "KES"
 
 
 def test_concurrent_duplicate_callbacks_create_one_inbox_row(app, channel):
@@ -468,3 +522,58 @@ def test_malformed_json_is_retained_as_an_exception(app, channel):
         ).one()
         assert transaction.processing_status == "exception"
         assert "JSON object" in transaction.exception_reason
+
+
+@pytest.mark.parametrize(
+    "transaction_id",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("", id="blank"),
+        pytest.param(True, id="wrong-type"),
+        pytest.param("T" * 101, id="overlength"),
+    ],
+)
+def test_repeated_callbacks_without_valid_transaction_ids_remain_exceptions(
+    app, channel, transaction_id
+):
+    payload = callback_payload(transaction_id=transaction_id)
+    with app.test_client() as client:
+        first = post_callback(client, channel["configuration_id"], payload)
+        second = post_callback(client, channel["configuration_id"], payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    with app.app_context():
+        transactions = MpesaCallbackTransaction.query.filter_by(
+            paybill_configuration_id=channel["configuration_id"],
+            provider_transaction_id=None,
+        ).all()
+        assert len(transactions) == 2
+        assert all(
+            transaction.processing_status == "exception"
+            and transaction.unit_id is None
+            and transaction.lease_id is None
+            for transaction in transactions
+        )
+
+
+def test_inactive_paybill_configuration_validation_is_rejected(app, channel):
+    with app.app_context():
+        configuration = db.session.get(
+            PropertyPayBillConfiguration, channel["configuration_id"]
+        )
+        configuration.is_active = False
+        db.session.commit()
+
+    with app.test_client() as client:
+        response = client.post(
+            f"/api/integrations/daraja/c2b/"
+            f"{channel['configuration_id']}/validation",
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "ResultCode": 1,
+        "ResultDesc": "Inactive configuration",
+    }

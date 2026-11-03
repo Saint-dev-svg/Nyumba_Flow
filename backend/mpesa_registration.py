@@ -95,7 +95,7 @@ def _callback_urls(configuration_id, base_url=None):
         ) from None
 
     if (
-        parsed.scheme.lower() not in {"http", "https"}
+        parsed.scheme.lower() != "https"
         or not parsed.netloc
         or not parsed.hostname
         or parsed.username is not None
@@ -110,7 +110,7 @@ def _callback_urls(configuration_id, base_url=None):
         or (port is not None and not 1 <= port <= 65535)
     ):
         raise DarajaRegistrationConfigurationError(
-            "MPESA_CALLBACK_BASE_URL must be an absolute HTTP or HTTPS URL "
+            "MPESA_CALLBACK_BASE_URL must be an absolute HTTPS URL "
             "without credentials, query strings, or fragments."
         )
 

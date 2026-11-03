@@ -182,6 +182,21 @@ def _callback_payload():
     return payload
 
 
+def _same_transaction(existing, incoming):
+    immutable_fields = (
+        ("provider_transaction_id", incoming["transaction_id"]),
+        ("business_shortcode", incoming["shortcode"]),
+        ("amount", incoming["amount"]),
+        ("account_reference", incoming["reference"]),
+        ("provider_transaction_at", incoming["provider_timestamp"]),
+        ("currency", incoming["currency"]),
+    )
+    return all(
+        getattr(existing, field) == value
+        for field, value in immutable_fields
+    )
+
+
 def _persist_callback(configuration, payload):
     errors = []
     if not isinstance(payload, dict):
@@ -226,7 +241,8 @@ def _persist_callback(configuration, payload):
         errors.append("Callback PayBill does not match this configured channel.")
 
     if (
-        shortcode == configuration.business_shortcode
+        transaction_id is not None
+        and shortcode == configuration.business_shortcode
         and reference
         and reference.strip()
         and len(reference) <= 100
@@ -273,7 +289,7 @@ def _persist_callback(configuration, payload):
     db.session.add(transaction)
     try:
         db.session.commit()
-        return transaction, False
+        return transaction, "created"
     except IntegrityError:
         db.session.rollback()
         if transaction_id:
@@ -282,7 +298,19 @@ def _persist_callback(configuration, payload):
                 provider_transaction_id=transaction_id,
             ).first()
             if existing is not None:
-                return existing, True
+                if _same_transaction(
+                    existing,
+                    {
+                        "transaction_id": transaction_id,
+                        "shortcode": shortcode,
+                        "amount": amount,
+                        "reference": reference,
+                        "provider_timestamp": provider_timestamp,
+                        "currency": currency,
+                    },
+                ):
+                    return existing, "duplicate"
+                return existing, "conflict"
         raise
 
 
@@ -468,6 +496,11 @@ def daraja_c2b_validation(configuration_id):
     )
     if configuration is None:
         return jsonify({"ResultCode": 1, "ResultDesc": "Unknown configuration"}), 404
+    if not configuration.is_active:
+        return jsonify({
+            "ResultCode": 1,
+            "ResultDesc": "Inactive configuration",
+        }), 200
     # Validation does not verify a payment or post financial records.
     return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
 
@@ -484,7 +517,7 @@ def daraja_c2b_confirmation(configuration_id):
 
     payload = _callback_payload()
     try:
-        _persist_callback(configuration, payload)
+        _, persistence_result = _persist_callback(configuration, payload)
     except SQLAlchemyError:
         db.session.rollback()
         current_app.logger.error("Unable to persist a Daraja callback inbox entry.")
@@ -492,6 +525,15 @@ def daraja_c2b_confirmation(configuration_id):
             "ResultCode": 1,
             "ResultDesc": "Temporary processing error",
         }), 500
+
+    if persistence_result == "conflict":
+        current_app.logger.warning(
+            "Conflicting duplicate Daraja transaction callback received."
+        )
+        return jsonify({
+            "ResultCode": 1,
+            "ResultDesc": "Conflicting duplicate transaction",
+        }), 200
 
     return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
 
