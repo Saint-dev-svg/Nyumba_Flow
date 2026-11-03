@@ -1,5 +1,7 @@
+import base64
 import json
 import os
+import re
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -51,6 +53,18 @@ class DarajaRegistrationAuthenticationError(DarajaRegistrationError):
 
 class DarajaRegistrationRequestError(DarajaRegistrationError):
     """Raised when Safaricom rejects or cannot process the request."""
+
+    def __init__(
+        self,
+        message,
+        provider_http_status=None,
+        provider_error_code=None,
+        provider_message=None,
+    ):
+        super().__init__(message)
+        self.provider_http_status = provider_http_status
+        self.provider_error_code = provider_error_code
+        self.provider_message = provider_message
 
 
 class DarajaRegistrationTimeoutError(DarajaRegistrationRequestError):
@@ -117,6 +131,90 @@ def _validate_callback_urls(validation_url, confirmation_url):
             raise DarajaRegistrationConfigurationError(
                 "A callback URL contains a restricted keyword."
             )
+
+
+def _sanitize_provider_error_value(value, max_length, sensitive_values):
+    if not isinstance(value, (str, int)) or isinstance(value, bool):
+        return None
+
+    text = "".join(
+        character if character.isprintable() else " "
+        for character in str(value)
+    )
+    text = " ".join(text.split())
+    text = re.sub(
+        r"\b(?:bearer|basic)\s+[^\s,;]+",
+        "[redacted]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    for sensitive_value in sorted(set(sensitive_values), key=len, reverse=True):
+        if sensitive_value:
+            text = re.sub(
+                re.escape(sensitive_value),
+                "[redacted]",
+                text,
+                flags=re.IGNORECASE,
+            )
+    text = text[:max_length].strip()
+    return text or None
+
+
+def _provider_http_error_details(response_body, configuration, access_token):
+    if not response_body or len(response_body) > MAX_RESPONSE_BYTES:
+        return None, None
+    try:
+        payload = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, None
+
+    approved_fields = {"errorCode", "errorMessage"}
+    if (
+        not isinstance(payload, dict)
+        or not payload
+        or not set(payload).issubset(approved_fields)
+    ):
+        return None, None
+
+    error_code = payload.get("errorCode")
+    error_message = payload.get("errorMessage")
+    if (
+        ("errorCode" in payload and (
+            not isinstance(error_code, (str, int))
+            or isinstance(error_code, bool)
+        ))
+        or ("errorMessage" in payload and not isinstance(error_message, str))
+    ):
+        return None, None
+
+    sensitive_values = [
+        configuration.business_shortcode,
+        access_token,
+        os.getenv("MPESA_CONSUMER_KEY", ""),
+        os.getenv("MPESA_CONSUMER_SECRET", ""),
+    ]
+    consumer_key, consumer_secret = sensitive_values[-2:]
+    if consumer_key and consumer_secret:
+        basic_credentials = base64.b64encode(
+            f"{consumer_key}:{consumer_secret}".encode("utf-8")
+        ).decode("ascii")
+        sensitive_values.extend(
+            (f"Basic {basic_credentials}", basic_credentials)
+        )
+
+    sanitized_code = (
+        _sanitize_provider_error_value(error_code, 64, sensitive_values)
+        if error_code is not None
+        else None
+    )
+    sanitized_message = (
+        _sanitize_provider_error_value(error_message, 240, sensitive_values)
+        if error_message is not None
+        else None
+    )
+    if sanitized_code is None and sanitized_message is None:
+        return None, None
+    return sanitized_code, sanitized_message
 
 
 def _provider_response(response_body):
@@ -228,8 +326,22 @@ def register_c2b_urls(configuration):
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             response_body = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as error:
+        try:
+            error_body = error.read(MAX_RESPONSE_BYTES + 1)
+        except (OSError, ValueError):
+            error_body = b""
+        finally:
+            error.close()
+        provider_error_code, provider_message = _provider_http_error_details(
+            error_body,
+            configuration,
+            access_token,
+        )
         raise DarajaRegistrationRequestError(
-            f"Safaricom returned HTTP {error.code} during URL registration."
+            f"Safaricom returned HTTP {error.code} during URL registration.",
+            provider_http_status=error.code,
+            provider_error_code=provider_error_code,
+            provider_message=provider_message,
         ) from None
     except (TimeoutError, socket.timeout):
         raise DarajaRegistrationTimeoutError(

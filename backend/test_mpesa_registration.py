@@ -1,5 +1,6 @@
 import json
 import uuid
+from io import BytesIO
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -323,12 +324,25 @@ def test_oauth_failure_is_sanitized(monkeypatch, app, registration_setup):
     assert "access_token" not in response.get_data(as_text=True)
 
 
-def test_provider_http_error_is_sanitized(monkeypatch, app, registration_setup):
+@pytest.mark.parametrize("status_code", [400, 401, 403, 500])
+def test_provider_http_error_includes_sanitized_details(
+    monkeypatch, app, registration_setup, status_code
+):
     set_sandbox(monkeypatch)
     mock_oauth(monkeypatch)
 
     def fake_urlopen(request, timeout):
-        raise HTTPError(request.full_url, 503, "Unavailable", {}, None)
+        body = json.dumps({
+            "errorCode": "REGISTRATION_FAILED",
+            "errorMessage": "The registration request was rejected.",
+        }).encode("utf-8")
+        raise HTTPError(
+            request.full_url,
+            status_code,
+            "Provider error",
+            {},
+            BytesIO(body),
+        )
 
     monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
     with app.test_client() as client:
@@ -337,7 +351,128 @@ def test_provider_http_error_is_sanitized(monkeypatch, app, registration_setup):
             headers=registration_setup["landlord_headers"],
         )
     assert response.status_code == 502
-    assert "HTTP 503" in response.get_json()["error"]
+    result = response.get_json()
+    assert result["success"] is False
+    assert result["error"] == (
+        f"Safaricom returned HTTP {status_code} during URL registration."
+    )
+    assert result["provider_http_status"] == status_code
+    assert result["provider_error_code"] == "REGISTRATION_FAILED"
+    assert result["provider_message"] == "The registration request was rejected."
+
+
+@pytest.mark.parametrize("body", [b"not-json", b"", b"[]", b'{"detail":"internal"}'])
+def test_provider_http_error_with_unusable_body_falls_back_to_generic_error(
+    monkeypatch, app, registration_setup, body
+):
+    set_sandbox(monkeypatch)
+    mock_oauth(monkeypatch)
+
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Provider error",
+            {},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    result = response.get_json()
+    assert response.status_code == 502
+    assert result["error"] == "Safaricom returned HTTP 500 during URL registration."
+    assert result["provider_http_status"] == 500
+    assert result["provider_error_code"] is None
+    assert result["provider_message"] is None
+
+
+def test_provider_http_error_redacts_sensitive_values(
+    monkeypatch, app, registration_setup
+):
+    set_sandbox(monkeypatch)
+    token = "test-oauth-token-do-not-return"
+    consumer_key = "test-consumer-key-do-not-return"
+    consumer_secret = "test-consumer-secret-do-not-return"
+    monkeypatch.setenv("MPESA_CONSUMER_KEY", consumer_key)
+    monkeypatch.setenv("MPESA_CONSUMER_SECRET", consumer_secret)
+    monkeypatch.setattr(
+        mpesa_registration, "get_access_token", lambda: token
+    )
+    message = (
+        f"Rejected {consumer_key} {consumer_secret} {token} "
+        f"{registration_setup['shortcode']} Bearer {token}"
+    )
+
+    def fake_urlopen(request, timeout):
+        body = json.dumps({
+            "errorCode": "REGISTRATION_FAILED",
+            "errorMessage": message,
+        }).encode("utf-8")
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Provider error",
+            {},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    response_text = response.get_data(as_text=True)
+    for sensitive_value in (
+        consumer_key,
+        consumer_secret,
+        token,
+        registration_setup["shortcode"],
+        "Bearer ",
+    ):
+        assert sensitive_value not in response_text
+    assert "[redacted]" in response.get_json()["provider_message"]
+
+
+def test_provider_http_error_with_sensitive_fields_uses_generic_error(
+    monkeypatch, app, registration_setup
+):
+    set_sandbox(monkeypatch)
+    mock_oauth(monkeypatch)
+
+    def fake_urlopen(request, timeout):
+        body = json.dumps({
+            "errorCode": "REGISTRATION_FAILED",
+            "errorMessage": "Request failed.",
+            "consumerSecret": "must-not-be-returned",
+            "access_token": "must-not-be-returned",
+        }).encode("utf-8")
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Provider error",
+            {},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with app.test_client() as client:
+        response = client.post(
+            registration_path(registration_setup),
+            headers=registration_setup["landlord_headers"],
+        )
+
+    result = response.get_json()
+    assert result["provider_error_code"] is None
+    assert result["provider_message"] is None
+    assert "must-not-be-returned" not in response.get_data(as_text=True)
 
 
 def test_registration_timeout_is_reported(monkeypatch, app, registration_setup):
