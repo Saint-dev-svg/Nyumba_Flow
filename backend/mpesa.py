@@ -7,6 +7,14 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from authorization import get_current_landlord_id
 from extensions import db
+from mpesa_registration import (
+    DarajaRegistrationAuthenticationError,
+    DarajaRegistrationConfigurationError,
+    DarajaRegistrationRequestError,
+    DarajaRegistrationResponseError,
+    DarajaRegistrationTimeoutError,
+    register_c2b_urls,
+)
 from models import (
     Lease,
     MpesaCallbackTransaction,
@@ -401,6 +409,47 @@ def update_paybill_configuration(property_id, configuration_id):
     return jsonify({
         "configuration": _configuration_dict(configuration),
     }), 200
+
+
+@mpesa_bp.post(
+    "/api/properties/<int:property_id>/mpesa-paybill/"
+    "<int:configuration_id>/register-url"
+)
+@jwt_required()
+def register_paybill_urls(property_id, configuration_id):
+    landlord_id = get_current_landlord_id()
+    if landlord_id is None:
+        return jsonify({"error": "An authenticated landlord account is required."}), 403
+
+    configuration = (
+        PropertyPayBillConfiguration.query
+        .join(Property)
+        .filter(
+            PropertyPayBillConfiguration.id == configuration_id,
+            PropertyPayBillConfiguration.property_id == property_id,
+            Property.owner_id == landlord_id,
+        )
+        .first()
+    )
+    if configuration is None:
+        return jsonify({"error": "PayBill configuration not found."}), 404
+    if not configuration.is_active:
+        return jsonify({"error": "Inactive PayBill configurations cannot be registered."}), 409
+
+    try:
+        result = register_c2b_urls(configuration)
+    except DarajaRegistrationConfigurationError as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+    except DarajaRegistrationAuthenticationError as error:
+        return jsonify({"success": False, "error": str(error)}), 502
+    except DarajaRegistrationTimeoutError as error:
+        return jsonify({"success": False, "error": str(error)}), 504
+    except DarajaRegistrationRequestError as error:
+        return jsonify({"success": False, "error": str(error)}), 502
+    except DarajaRegistrationResponseError as error:
+        return jsonify({"success": False, "error": str(error)}), 502
+
+    return jsonify(result), 200 if result["success"] else 502
 
 
 @mpesa_bp.post(
