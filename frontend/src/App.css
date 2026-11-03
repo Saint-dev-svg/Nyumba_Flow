@@ -920,6 +920,67 @@ button.nav-item {
   background: var(--color-surface);
 }
 
+.paybill-card {
+  display: grid;
+  gap: 14px;
+}
+
+.paybill-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.paybill-shortcode {
+  display: grid;
+  gap: 4px;
+}
+
+.paybill-shortcode > span,
+.paybill-details dt {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.paybill-shortcode strong {
+  color: var(--color-text);
+  font-size: 18px;
+  letter-spacing: 0.01em;
+}
+
+.paybill-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px 22px;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.paybill-details > div {
+  min-width: 0;
+}
+
+.paybill-details dd {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.paybill-details small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .mpesa-transaction-detail {
   margin-bottom: 20px;
   padding: 17px;
@@ -966,41 +1027,22 @@ button.nav-item {
   margin-top: 12px;
 }
 
-.paybill-card,
-.paybill-card > div:first-child {
+.paybill-card-actions {
   display: flex;
   justify-content: space-between;
-  gap: 15px;
+  align-items: center;
+  gap: 10px;
 }
 
-.paybill-card > div:first-child {
-  flex-direction: column;
-  gap: 4px;
-}
-
-.paybill-card strong,
 .mpesa-transaction-heading strong {
   color: var(--color-text);
   font-size: 14px;
 }
 
-.paybill-card span,
-.paybill-card small,
 .mpesa-transaction-heading span {
   color: var(--color-muted);
   font-size: 11px;
   line-height: 1.6;
-}
-
-.paybill-card small code {
-  overflow-wrap: anywhere;
-  color: var(--color-text);
-}
-
-.paybill-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .mpesa-inbox-filter {
@@ -3912,14 +3954,29 @@ button.nav-item {
 }
 
 @media (max-width: 760px) {
-  .paybill-card {
-    align-items: flex-start;
+  .paybill-section {
+    padding: 17px;
+  }
+
+  .paybill-form {
+    align-items: stretch;
     flex-direction: column;
   }
 
-  .paybill-card-actions {
-    justify-content: space-between;
+  .paybill-form input {
     width: 100%;
+  }
+
+  .paybill-form button {
+    align-self: flex-start;
+  }
+
+  .paybill-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .paybill-card-actions {
+    justify-content: flex-end;
   }
 
   .mpesa-transaction-card .payment-history-details {

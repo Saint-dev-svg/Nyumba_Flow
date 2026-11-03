@@ -3895,8 +3895,8 @@ function PayBillSettings({ propertyId }) {
         </div>
       </div>
       <p className="paybill-note">
-        Tenants use their unit number as the account reference. This setup stores no Daraja credentials
-        and does not confirm or record payments.
+        Tenants should enter their unit number in the account reference when
+        paying. PayBill settings do not confirm or record payments.
       </p>
       {actionError && <div className="form-error" role="alert">{actionError}</div>}
       {successMessage && <div className="payment-success" role="status">{successMessage}</div>}
@@ -3932,19 +3932,38 @@ function PayBillSettings({ propertyId }) {
         <ul className="paybill-list">
           {data.configurations.map((configuration) => (
             <li className="paybill-card" key={configuration.id}>
-              <div>
-                <strong>{configuration.business_shortcode}</strong>
-                <span>Account reference: unit number</span>
-                <small>
-                  Confirmation callback: <code>{configuration.confirmation_callback_path}</code>
-                  <br />
-                  Validation callback: <code>{configuration.validation_callback_path}</code>
-                </small>
-              </div>
-              <div className="paybill-card-actions">
+              <div className="paybill-card-header">
+                <div className="paybill-shortcode">
+                  <span>PayBill shortcode</span>
+                  <strong>{configuration.business_shortcode}</strong>
+                </div>
                 <span className={`status-pill${configuration.is_active ? ' is-active' : ''}`}>
                   {configuration.is_active ? 'Active' : 'Inactive'}
                 </span>
+              </div>
+              <dl className="paybill-details">
+                <div>
+                  <dt>Account reference</dt>
+                  <dd>Unit Number</dd>
+                  <small>Tenants should use their unit number when making a payment.</small>
+                </div>
+                <div>
+                  <dt>Daraja environment</dt>
+                  <dd>Sandbox only</dd>
+                  <small>Production registration is not currently supported.</small>
+                </div>
+                <div>
+                  <dt>Callback registration</dt>
+                  <dd>Status unavailable</dd>
+                  <small>Registration results are not saved in this dashboard.</small>
+                </div>
+                <div>
+                  <dt>Connection</dt>
+                  <dd>Not verified</dd>
+                  <small>No connection check has been performed.</small>
+                </div>
+              </dl>
+              <div className="paybill-card-actions">
                 <button
                   className="text-button"
                   type="button"
