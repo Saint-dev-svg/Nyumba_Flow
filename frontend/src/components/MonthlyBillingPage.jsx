@@ -85,6 +85,41 @@ function MeterReadingAndBillingPanel({
   }, [propertyId, billingMonth, reload])
 
   const propertyUnits = units.filter((unit) => String(unit.property_id) === propertyId)
+  const unitsNeedingAttention = generationResult
+    ? new Set(generationResult.needs_readings.map((item) => item.unit_id)).size
+    : 0
+
+  function generationFeedback() {
+    if (
+      generationResult.created_count === 0
+      && generationResult.already_existing_count === 0
+      && generationResult.needs_reading_count === 0
+    ) {
+      return 'No eligible invoices were found for this billing month. No invoices were created.'
+    }
+    if (
+      generationResult.created_count === 0
+      && generationResult.already_existing_count > 0
+      && generationResult.needs_reading_count === 0
+    ) {
+      return 'All invoices for this billing month already exist. No duplicate invoices were created.'
+    }
+
+    const outcomes = []
+    if (generationResult.created_count > 0) {
+      outcomes.push(`${generationResult.created_count} invoice${generationResult.created_count === 1 ? '' : 's'} created`)
+    }
+    if (generationResult.already_existing_count > 0) {
+      outcomes.push(`${generationResult.already_existing_count} invoice${generationResult.already_existing_count === 1 ? '' : 's'} already existed`)
+    }
+    if (unitsNeedingAttention > 0) {
+      outcomes.push(`${unitsNeedingAttention} unit${unitsNeedingAttention === 1 ? '' : 's'} need attention before utility invoices can be generated`)
+    }
+    if (generationResult.created_count === 0) {
+      return `No invoices were created. ${outcomes.join('; ')}.`
+    }
+    return `${outcomes.join('; ')}.`
+  }
 
   async function saveRates(event) {
     event.preventDefault()
@@ -203,10 +238,9 @@ function MeterReadingAndBillingPanel({
       {generationError && <div className="form-error utility-inline-error" role="alert">{generationError}<button className="text-button" type="button" disabled={isGenerating} onClick={generateDrafts}>Retry</button></div>}
       {generationResult && (
         <div className="generation-summary" role="status" aria-live="polite">
-          <div><h4>Draft generation complete for {generationResult.billing_month}</h4><p>{generationResult.created_count} created · {generationResult.already_existing_count} already existed · {generationResult.needs_reading_count} need meter attention.</p></div>
+          <div><h4>Monthly billing results for {generationResult.billing_month}</h4><p>{generationFeedback()}</p></div>
           {generationResult.created_invoices.length > 0 && <div className="generation-summary-group"><strong>Created drafts</strong><ul>{generationResult.created_invoices.map((invoice) => <li key={invoice.id}><button className="text-button" type="button" onClick={() => onReviewInvoice(invoice.id, invoice.purpose)}>Review {invoice.purpose} draft · {formatKes(invoice.total_amount)}</button></li>)}</ul></div>}
-          {generationResult.already_existing.length > 0 && <div className="generation-summary-group"><strong>Already existing</strong><ul>{generationResult.already_existing.map((invoice) => <li key={invoice.id}><button className="text-button" type="button" onClick={() => onReviewInvoice(invoice.id, invoice.purpose)}>Review {invoice.purpose} invoice</button></li>)}</ul></div>}
-          {generationResult.needs_readings.length > 0 && <div className="generation-summary-group generation-needs-readings"><strong>Readings needed</strong><ul>{generationResult.needs_readings.map((item) => <li key={`${item.unit_id}-${item.reason}`}>{item.property_name} · Unit {item.unit_number}: {item.reason === 'missing' ? 'enter readings for this month' : item.reason === 'invalid' ? 'correct the saved meter readings' : 'calculated utility amount exceeds the invoice limit'}</li>)}</ul></div>}
+          {generationResult.needs_readings.length > 0 && <div className="generation-summary-group generation-needs-readings"><strong>Units needing attention ({unitsNeedingAttention})</strong><ul>{generationResult.needs_readings.map((item) => <li key={`${item.unit_id}-${item.reason}`}>{item.property_name} · Unit {item.unit_number}: {item.reason === 'missing' ? 'enter readings for this month' : item.reason === 'invalid' ? 'correct the saved meter readings' : 'calculated utility amount exceeds the invoice limit'}</li>)}</ul></div>}
         </div>
       )}
     </section>
@@ -284,7 +318,7 @@ export default function MonthlyBillingPage({
         </button>
       </div>
 
-      {data.loading ? (
+      {data.loading && data.properties.length === 0 ? (
         <div className="overview-message" role="status" aria-live="polite"><span className="loading-dot" aria-hidden="true" /> Loading billing information…</div>
       ) : data.error ? (
         <div className="overview-message overview-error" role="alert">
