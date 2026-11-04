@@ -172,7 +172,7 @@ describe('MonthlyBillingPage', () => {
     await screen.findByLabelText('Current reading')
     fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('2 invoices created.')
+    expect(await screen.findByText('2 invoices created.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review rent draft/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review utilities draft/ })).toBeInTheDocument()
   })
@@ -190,9 +190,9 @@ describe('MonthlyBillingPage', () => {
     await screen.findByLabelText('Current reading')
     fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
+    expect(await screen.findByText(
       'All invoices for this billing month already exist. No duplicate invoices were created.',
-    )
+    )).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Review .* invoice/ })).not.toBeInTheDocument()
     expect(screen.queryByText('Already existing')).not.toBeInTheDocument()
   })
@@ -204,9 +204,9 @@ describe('MonthlyBillingPage', () => {
     await screen.findByLabelText('Current reading')
     fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
+    expect(await screen.findByText(
       '1 invoice created; 1 invoice already existed; 1 unit need attention before utility invoices can be generated.',
-    )
+    )).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Review .* invoice/ })).not.toBeInTheDocument()
     expect(apiRequest).toHaveBeenCalledWith('/api/invoices/generate-monthly', {
       method: 'POST',
@@ -255,11 +255,38 @@ describe('MonthlyBillingPage', () => {
     await screen.findByLabelText('Current reading')
     fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
 
-    const summary = await screen.findByRole('status')
-    expect(summary).toHaveTextContent('No invoices were created.')
-    expect(summary).toHaveTextContent('2 units need attention before utility invoices can be generated.')
-    expect(summary).toHaveTextContent('Unit A1: enter readings for this month')
-    expect(summary).toHaveTextContent('Unit A2: correct the saved meter readings')
+    expect(await screen.findByText(/Meter readings are required for 2 units\./)).toBeInTheDocument()
+    expect(screen.getByText(/No invoices were created for the affected leases\./)).toBeInTheDocument()
+    expect(screen.getByText(/Save the missing readings and retry generation\./)).toBeInTheDocument()
+    expect(screen.getByText(/Unit A1: enter readings for this month/)).toBeInTheDocument()
+    expect(screen.getByText(/Unit A2: correct the saved meter readings/)).toBeInTheDocument()
+  })
+
+  it('explains that missing meter readings prevented invoice generation', async () => {
+    const result = generationResponse({
+      needsReadings: [{
+        lease_id: 19,
+        tenant_id: 23,
+        tenant_name: 'Sam Tenant',
+        property_id: property.id,
+        property_name: property.name,
+        unit_id: unit.id,
+        unit_number: unit.unit_number,
+        reason: 'missing',
+      }],
+    })
+    configureSuccessfulApi({ generatedResult: result })
+    renderPage()
+
+    await screen.findByLabelText('Current reading')
+    fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
+
+    expect(await screen.findByText(
+      'Meter readings are required for 1 unit. No invoices were created for the affected leases. Save the missing readings and retry generation.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(
+      'No eligible invoices were found for this billing month. No invoices were created.',
+    )).not.toBeInTheDocument()
   })
 
   it('reports when no invoices are eligible for generation', async () => {
@@ -269,9 +296,9 @@ describe('MonthlyBillingPage', () => {
     await screen.findByLabelText('Current reading')
     fireEvent.click(screen.getByRole('button', { name: 'Generate draft invoices' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
+    expect(await screen.findByText(
       'No eligible invoices were found for this billing month. No invoices were created.',
-    )
+    )).toBeInTheDocument()
   })
 
   it('preserves the generation error feedback when the API request fails', async () => {

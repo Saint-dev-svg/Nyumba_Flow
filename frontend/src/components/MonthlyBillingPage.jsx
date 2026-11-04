@@ -93,6 +93,15 @@ function MeterReadingAndBillingPanel({
     if (
       generationResult.created_count === 0
       && generationResult.already_existing_count === 0
+      && generationResult.needs_reading_count > 0
+      && generationResult.needs_readings.some((item) => item.reason === 'missing')
+    ) {
+      const affectedUnits = unitsNeedingAttention || generationResult.needs_reading_count
+      return `Meter readings are required for ${affectedUnits} unit${affectedUnits === 1 ? '' : 's'}. No invoices were created for the affected leases. Save the missing readings and retry generation.`
+    }
+    if (
+      generationResult.created_count === 0
+      && generationResult.already_existing_count === 0
       && generationResult.needs_reading_count === 0
     ) {
       return 'No eligible invoices were found for this billing month. No invoices were created.'
