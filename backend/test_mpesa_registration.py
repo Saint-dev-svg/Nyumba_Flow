@@ -208,13 +208,16 @@ def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_
     assert result["business_shortcode"] == registration_setup["shortcode"]
     assert len(calls) == 1
     request, timeout = calls[0]
-    assert request.full_url == mpesa_registration.SANDBOX_REGISTER_URL
+    assert request.full_url == (
+        "https://sandbox.safaricom.co.ke/mpesa/c2b/v1/registerurl"
+    )
     assert request.get_method() == "POST"
     assert request.get_header("Authorization") == "Bearer mocked-access-token"
     assert request.get_header("Content-type") == "application/json"
     assert request.get_header("Accept") == "application/json"
     assert timeout == mpesa_registration.REQUEST_TIMEOUT_SECONDS
-    assert json.loads(request.data.decode("utf-8")) == {
+    request_payload = json.loads(request.data.decode("utf-8"))
+    assert request_payload == {
         "ShortCode": registration_setup["shortcode"],
         "ResponseType": "Completed",
         "ValidationURL": (
@@ -225,6 +228,12 @@ def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_
             "https://nyumbaflow.example.test/api/integrations/daraja/c2b/"
             f"{registration_setup['configuration_id']}/confirmation"
         ),
+    }
+    assert set(request_payload) == {
+        "ShortCode",
+        "ResponseType",
+        "ValidationURL",
+        "ConfirmationURL",
     }
 
 

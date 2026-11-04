@@ -13,7 +13,7 @@ from mpesa_oauth import DarajaOAuthError, get_access_token_with_source
 
 
 SANDBOX_REGISTER_URL = (
-    "https://sandbox.safaricom.co.ke/mpesa/c2b/v2/registerurl"
+    "https://sandbox.safaricom.co.ke/mpesa/c2b/v1/registerurl"
 )
 REQUEST_TIMEOUT_SECONDS = 10
 MAX_RESPONSE_BYTES = 64 * 1024

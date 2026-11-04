@@ -290,6 +290,48 @@ def test_properties_have_separate_channels_and_same_unit_numbers_are_scoped(
         assert first.property_id != second.property_id
 
 
+def test_callback_with_msisdn_still_matches_and_only_stages_in_inbox(
+    app, channel
+):
+    with app.app_context():
+        original_counts = (
+            Payment.query.filter_by(tenant_id=channel["tenant_id"]).count(),
+            Receipt.query.join(Payment).filter(
+                Payment.tenant_id == channel["tenant_id"]
+            ).count(),
+            PaymentAllocation.query.join(Payment).filter(
+                Payment.tenant_id == channel["tenant_id"]
+            ).count(),
+        )
+
+    payload = callback_payload(transaction_id="QK-MSISDN")
+    payload["MSISDN"] = "254712345678"
+    with app.test_client() as client:
+        response = post_callback(client, channel["configuration_id"], payload)
+
+    assert response.status_code == 200
+    with app.app_context():
+        transaction = MpesaCallbackTransaction.query.filter_by(
+            provider_transaction_id="QK-MSISDN"
+        ).one()
+        assert transaction.processing_status == "matched"
+        assert transaction.unit_id == channel["unit_id"]
+        assert transaction.lease_id == channel["lease_id"]
+        assert transaction.provider_metadata == {
+            "TransactionType": "Pay Bill",
+            "ThirdPartyTransID": "invoice-ref",
+        }
+        assert (
+            Payment.query.filter_by(tenant_id=channel["tenant_id"]).count(),
+            Receipt.query.join(Payment).filter(
+                Payment.tenant_id == channel["tenant_id"]
+            ).count(),
+            PaymentAllocation.query.join(Payment).filter(
+                Payment.tenant_id == channel["tenant_id"]
+            ).count(),
+        ) == original_counts
+
+
 def test_unknown_shortcode_is_retained_as_exception(app, channel):
     with app.test_client() as client:
         response = post_callback(
