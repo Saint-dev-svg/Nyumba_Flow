@@ -63,6 +63,30 @@ def test_success_uses_http_basic_and_caches_token(monkeypatch):
     assert timeout == mpesa_oauth.REQUEST_TIMEOUT_SECONDS
 
 
+def test_access_token_source_distinguishes_fresh_from_cached(monkeypatch):
+    set_valid_credentials(monkeypatch)
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(request)
+        return FakeResponse(json.dumps({
+            "access_token": "source-test-token",
+            "expires_in": "3600",
+        }).encode("utf-8"))
+
+    monkeypatch.setattr(mpesa_oauth, "urlopen", fake_urlopen)
+
+    assert mpesa_oauth.get_access_token_with_source() == (
+        "source-test-token",
+        "fresh",
+    )
+    assert mpesa_oauth.get_access_token_with_source() == (
+        "source-test-token",
+        "cached",
+    )
+    assert len(calls) == 1
+
+
 def test_expired_token_is_requested_again(monkeypatch):
     set_valid_credentials(monkeypatch)
     tokens = iter(("expired-test-token", "fresh-test-token"))

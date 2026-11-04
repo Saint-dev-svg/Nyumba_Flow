@@ -134,8 +134,8 @@ def _request_access_token(consumer_key, consumer_secret):
     return _parse_oauth_response(response_body)
 
 
-def get_access_token():
-    """Return a cached, unexpired sandbox OAuth token or request a new one."""
+def get_access_token_with_source():
+    """Return a sandbox token and whether it was freshly requested or cached."""
     global _cached_token, _cached_token_expires_at
     global _cached_credential_fingerprint
 
@@ -150,7 +150,7 @@ def get_access_token():
             and credential_fingerprint == _cached_credential_fingerprint
             and now < _cached_token_expires_at
         ):
-            return _cached_token
+            return _cached_token, "cached"
 
         access_token, expires_in = _request_access_token(
             consumer_key,
@@ -161,4 +161,10 @@ def get_access_token():
         _cached_token_expires_at = (
             monotonic() + max(0, expires_in - TOKEN_EXPIRY_SKEW_SECONDS)
         )
-        return access_token
+        return access_token, "fresh"
+
+
+def get_access_token():
+    """Return a cached, unexpired sandbox OAuth token or request a new one."""
+    access_token, _ = get_access_token_with_source()
+    return access_token

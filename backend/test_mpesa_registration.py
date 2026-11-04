@@ -1,5 +1,7 @@
 import json
+import logging
 import uuid
+from datetime import datetime, timezone
 from io import BytesIO
 from urllib.error import HTTPError, URLError
 
@@ -14,8 +16,9 @@ from test_config import create_test_app
 
 
 class FakeResponse:
-    def __init__(self, body):
+    def __init__(self, body, status=200):
         self.body = body
+        self.status = status
 
     def __enter__(self):
         return self
@@ -146,9 +149,36 @@ def set_sandbox(monkeypatch):
 def mock_oauth(monkeypatch):
     monkeypatch.setattr(
         mpesa_registration,
-        "get_access_token",
-        lambda: "mocked-access-token",
+        "get_access_token_with_source",
+        lambda: ("mocked-access-token", "cached"),
     )
+
+
+def registration_diagnostic(caplog):
+    records = [
+        record
+        for record in caplog.records
+        if record.name == mpesa_registration.__name__
+        and '"event":"daraja_c2b_registration"' in record.getMessage()
+    ]
+    assert len(records) == 1
+    return json.loads(records[0].getMessage())
+
+
+@pytest.mark.parametrize(
+    ("shortcode", "expected"),
+    [
+        ("1", "*"),
+        ("12", "*2"),
+        ("123", "*23"),
+        ("1234", "*234"),
+        ("123456", "***456"),
+    ],
+)
+def test_shortcode_masking_never_reveals_entire_short_shortcode(
+    shortcode, expected
+):
+    assert mpesa_registration._mask_shortcode(shortcode) == expected
 
 
 def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_setup):
@@ -196,6 +226,158 @@ def test_success_registers_exact_sandbox_request(monkeypatch, app, registration_
             f"{registration_setup['configuration_id']}/confirmation"
         ),
     }
+
+
+def test_successful_registration_logs_sanitized_diagnostics(
+    monkeypatch, app, registration_setup, caplog
+):
+    set_sandbox(monkeypatch)
+    consumer_key = "diagnostic-consumer-key"
+    consumer_secret = "diagnostic-consumer-secret"
+    token = "diagnostic-oauth-token"
+    monkeypatch.setenv("MPESA_CONSUMER_KEY", consumer_key)
+    monkeypatch.setenv("MPESA_CONSUMER_SECRET", consumer_secret)
+    monkeypatch.setattr(
+        mpesa_registration,
+        "get_access_token_with_source",
+        lambda: (token, "fresh"),
+    )
+    monkeypatch.setattr(
+        mpesa_registration,
+        "urlopen",
+        lambda request, timeout: FakeResponse(json.dumps({
+            "ResponseCode": "0",
+            "ResponseDescription": "Registration accepted",
+            "requestId": "provider-request-123",
+            "ConversationID": "do-not-log-conversation-id",
+        }).encode("utf-8")),
+    )
+
+    with caplog.at_level(logging.INFO, logger=mpesa_registration.__name__):
+        with app.test_client() as client:
+            response = client.post(
+                registration_path(registration_setup),
+                headers=registration_setup["landlord_headers"],
+            )
+
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["success"] is True
+    assert "oauth_token_source" not in result
+    diagnostics = registration_diagnostic(caplog)
+    assert diagnostics["event"] == "daraja_c2b_registration"
+    timestamp = datetime.fromisoformat(diagnostics["timestamp"])
+    assert timestamp.tzinfo is not None
+    assert timestamp.utcoffset() == timezone.utc.utcoffset(timestamp)
+    assert diagnostics["environment"] == "sandbox"
+    assert diagnostics["shortcode"] == (
+        "*" * (len(registration_setup["shortcode"]) - 3)
+        + registration_setup["shortcode"][-3:]
+    )
+    assert diagnostics["response_type"] == "Completed"
+    assert diagnostics["validation_callback"] == {
+        "hostname": "nyumbaflow.example.test",
+        "path": (
+            "/api/integrations/daraja/c2b/"
+            f"{registration_setup['configuration_id']}/validation"
+        ),
+    }
+    assert diagnostics["confirmation_callback"]["hostname"] == (
+        "nyumbaflow.example.test"
+    )
+    assert diagnostics["oauth_status"] == "succeeded"
+    assert diagnostics["oauth_token_source"] == "fresh"
+    assert diagnostics["provider_http_status"] == 200
+    assert diagnostics["provider_error_code"] == "0"
+    assert diagnostics["provider_message"] == "Registration accepted"
+    assert diagnostics["provider_request_id"] == "provider-request-123"
+    assert diagnostics["outcome"] == "succeeded"
+    assert diagnostics["failure_category"] is None
+
+    log_text = caplog.text
+    for sensitive_value in (
+        consumer_key,
+        consumer_secret,
+        token,
+        registration_setup["shortcode"],
+        "Bearer ",
+        "Basic ",
+        "do-not-log-conversation-id",
+    ):
+        assert sensitive_value not in log_text
+
+
+def test_failed_registration_logs_safe_provider_diagnostics(
+    monkeypatch, app, registration_setup, caplog
+):
+    set_sandbox(monkeypatch)
+    consumer_key = "failure-consumer-key"
+    consumer_secret = "failure-consumer-secret"
+    token = "failure-oauth-token"
+    monkeypatch.setenv("MPESA_CONSUMER_KEY", consumer_key)
+    monkeypatch.setenv("MPESA_CONSUMER_SECRET", consumer_secret)
+    monkeypatch.setattr(
+        mpesa_registration,
+        "get_access_token_with_source",
+        lambda: (token, "cached"),
+    )
+    error_body = json.dumps({
+        "errorCode": "500.003.1001",
+        "errorMessage": (
+            f"Rejected Consumer Key: {consumer_key} "
+            f"Consumer Secret: {consumer_secret} access_token={token} "
+            f"SecurityCredential: private-value password=private-password "
+            f"Shortcode {registration_setup['shortcode']}"
+        ),
+        "requestId": "provider-failure-request-id",
+    }).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Provider error",
+            {},
+            BytesIO(error_body),
+        )
+
+    monkeypatch.setattr(mpesa_registration, "urlopen", fake_urlopen)
+    with caplog.at_level(logging.INFO, logger=mpesa_registration.__name__):
+        with app.test_client() as client:
+            response = client.post(
+                registration_path(registration_setup),
+                headers=registration_setup["landlord_headers"],
+            )
+
+    assert response.status_code == 502
+    result = response.get_json()
+    assert result["provider_http_status"] == 500
+    assert result["provider_error_code"] == "500.003.1001"
+    assert result["provider_request_id"] == "provider-failure-request-id"
+    assert "oauth_token_source" not in result
+    diagnostics = registration_diagnostic(caplog)
+    assert diagnostics["oauth_status"] == "succeeded"
+    assert diagnostics["oauth_token_source"] == "cached"
+    assert diagnostics["provider_http_status"] == 500
+    assert diagnostics["provider_error_code"] == "500.003.1001"
+    assert diagnostics["provider_request_id"] == "provider-failure-request-id"
+    assert diagnostics["outcome"] == "failed"
+    assert diagnostics["failure_category"] == "provider_http_error"
+
+    log_text = caplog.text
+    for sensitive_value in (
+        consumer_key,
+        consumer_secret,
+        token,
+        registration_setup["shortcode"],
+        "private-value",
+        "private-password",
+        "Bearer ",
+        "Basic ",
+    ):
+        assert sensitive_value not in log_text
+    assert "500.003.1001" in log_text
+    assert "provider-failure-request-id" in log_text
 
 
 def test_https_callback_base_url_is_accepted():
@@ -329,24 +511,32 @@ def test_each_generated_callback_url_is_checked(
     assert not request_sent
 
 
-def test_oauth_failure_is_sanitized(monkeypatch, app, registration_setup):
+def test_oauth_failure_is_sanitized(
+    monkeypatch, app, registration_setup, caplog
+):
     set_sandbox(monkeypatch)
     monkeypatch.setattr(
         mpesa_registration,
-        "get_access_token",
+        "get_access_token_with_source",
         lambda: (_ for _ in ()).throw(
             mpesa_oauth.DarajaAuthenticationError("rejected credentials")
         ),
     )
-    with app.test_client() as client:
-        response = client.post(
-            registration_path(registration_setup),
-            headers=registration_setup["landlord_headers"],
-        )
+    with caplog.at_level(logging.INFO, logger=mpesa_registration.__name__):
+        with app.test_client() as client:
+            response = client.post(
+                registration_path(registration_setup),
+                headers=registration_setup["landlord_headers"],
+            )
     assert response.status_code == 502
     assert response.get_json()["success"] is False
     assert "rejected credentials" not in response.get_data(as_text=True)
     assert "access_token" not in response.get_data(as_text=True)
+    diagnostics = registration_diagnostic(caplog)
+    assert diagnostics["oauth_status"] == "failed"
+    assert diagnostics["oauth_token_source"] is None
+    assert diagnostics["failure_category"] == "oauth"
+    assert "rejected credentials" not in caplog.text
 
 
 @pytest.mark.parametrize("status_code", [400, 401, 403, 500])
@@ -430,7 +620,9 @@ def test_provider_http_error_redacts_sensitive_values(
     monkeypatch.setenv("MPESA_CONSUMER_KEY", consumer_key)
     monkeypatch.setenv("MPESA_CONSUMER_SECRET", consumer_secret)
     monkeypatch.setattr(
-        mpesa_registration, "get_access_token", lambda: token
+        mpesa_registration,
+        "get_access_token_with_source",
+        lambda: (token, "fresh"),
     )
     message = (
         f"Rejected {consumer_key} {consumer_secret} {token} "

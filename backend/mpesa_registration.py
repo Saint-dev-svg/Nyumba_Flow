@@ -1,13 +1,15 @@
 import base64
 import json
+import logging
 import os
 import re
 import socket
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from mpesa_oauth import DarajaOAuthError, get_access_token
+from mpesa_oauth import DarajaOAuthError, get_access_token_with_source
 
 
 SANDBOX_REGISTER_URL = (
@@ -26,6 +28,7 @@ RESTRICTED_CALLBACK_URL_TERMS = (
     "sql",
     "query",
 )
+logger = logging.getLogger(__name__)
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -150,6 +153,14 @@ def _sanitize_provider_error_value(value, max_length, sensitive_values):
         text,
         flags=re.IGNORECASE,
     )
+    text = re.sub(
+        r"\b(?:consumer[_ ]?(?:key|secret)|access[_ ]?token|"
+        r"security[_ ]?credential|password|authorization)\b"
+        r"(?:\s*[:=]\s*|\s+)[^\s,;]+",
+        "[redacted]",
+        text,
+        flags=re.IGNORECASE,
+    )
     for sensitive_value in sorted(set(sensitive_values), key=len, reverse=True):
         if sensitive_value:
             text = re.sub(
@@ -192,20 +203,9 @@ def _provider_http_error_details(response_body, configuration, access_token):
     ):
         return None, None, None
 
-    sensitive_values = [
-        configuration.business_shortcode,
-        access_token,
-        os.getenv("MPESA_CONSUMER_KEY", ""),
-        os.getenv("MPESA_CONSUMER_SECRET", ""),
-    ]
-    consumer_key, consumer_secret = sensitive_values[-2:]
-    if consumer_key and consumer_secret:
-        basic_credentials = base64.b64encode(
-            f"{consumer_key}:{consumer_secret}".encode("utf-8")
-        ).decode("ascii")
-        sensitive_values.extend(
-            (f"Basic {basic_credentials}", basic_credentials)
-        )
+    sensitive_values = _diagnostic_sensitive_values(
+        configuration, access_token
+    )
 
     sanitized_code = (
         _sanitize_provider_error_value(error_code, 64, sensitive_values)
@@ -229,6 +229,92 @@ def _provider_http_error_details(response_body, configuration, access_token):
     ):
         return None, None, None
     return sanitized_code, sanitized_message, sanitized_request_id
+
+
+def _diagnostic_sensitive_values(configuration, access_token):
+    sensitive_values = [
+        str(configuration.business_shortcode or ""),
+        access_token or "",
+        os.getenv("MPESA_CONSUMER_KEY", ""),
+        os.getenv("MPESA_CONSUMER_SECRET", ""),
+    ]
+    consumer_key, consumer_secret = sensitive_values[-2:]
+    if consumer_key and consumer_secret:
+        basic_credentials = base64.b64encode(
+            f"{consumer_key}:{consumer_secret}".encode("utf-8")
+        ).decode("ascii")
+        sensitive_values.extend(
+            (f"Basic {basic_credentials}", basic_credentials)
+        )
+    return sensitive_values
+
+
+def _callback_location(callback_url):
+    parsed = urlsplit(callback_url)
+    return {"hostname": parsed.hostname, "path": parsed.path}
+
+
+def _mask_shortcode(shortcode):
+    visible_length = min(3, max(0, len(shortcode) - 1))
+    masked_length = len(shortcode) - visible_length
+    visible_suffix = shortcode[-visible_length:] if visible_length else ""
+    return "*" * masked_length + visible_suffix
+
+
+def _registration_diagnostics(configuration):
+    environment = os.getenv("MPESA_ENVIRONMENT", "").strip().lower()
+    if environment not in {"sandbox", "production"}:
+        environment = "unset" if not environment else "other"
+
+    shortcode = str(getattr(configuration, "business_shortcode", "") or "")
+    masked_shortcode = _mask_shortcode(shortcode) if shortcode else None
+    return {
+        "event": "daraja_c2b_registration",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "environment": environment,
+        "shortcode": masked_shortcode,
+        "response_type": RESPONSE_TYPE,
+        "validation_callback": None,
+        "confirmation_callback": None,
+        "oauth_status": "not_attempted",
+        "oauth_token_source": None,
+        "provider_http_status": None,
+        "provider_error_code": None,
+        "provider_message": None,
+        "provider_request_id": None,
+        "outcome": "failed",
+        "failure_category": "unexpected_failure",
+    }
+
+
+def _provider_response_diagnostic_fields(
+    response_body, configuration, access_token
+):
+    try:
+        payload = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, None, None
+    if not isinstance(payload, dict):
+        return None, None, None
+
+    sensitive_values = _diagnostic_sensitive_values(
+        configuration, access_token
+    )
+    code = payload.get("errorCode", payload.get("ResponseCode"))
+    message = payload.get("errorMessage", payload.get("ResponseDescription"))
+    request_id = payload.get("requestId")
+    return (
+        _sanitize_provider_error_value(code, 64, sensitive_values),
+        _sanitize_provider_error_value(message, 240, sensitive_values),
+        _sanitize_provider_error_value(request_id, 128, sensitive_values),
+    )
+
+
+def _log_registration_diagnostics(diagnostics):
+    logger.info(
+        "%s",
+        json.dumps(diagnostics, separators=(",", ":"), sort_keys=True),
+    )
 
 
 def _provider_response(response_body):
@@ -301,7 +387,7 @@ def _provider_response(response_body):
     return succeeded, code
 
 
-def register_c2b_urls(configuration):
+def _perform_registration(configuration, diagnostics):
     """Register a property's C2B URLs with Daraja sandbox."""
     environment = os.getenv("MPESA_ENVIRONMENT", "").strip().lower()
     if environment != "sandbox":
@@ -312,6 +398,10 @@ def register_c2b_urls(configuration):
 
     validation_url, confirmation_url = _callback_urls(configuration.id)
     _validate_callback_urls(validation_url, confirmation_url)
+    diagnostics["validation_callback"] = _callback_location(validation_url)
+    diagnostics["confirmation_callback"] = _callback_location(
+        confirmation_url
+    )
     payload = {
         "ShortCode": configuration.business_shortcode,
         "ResponseType": RESPONSE_TYPE,
@@ -320,8 +410,12 @@ def register_c2b_urls(configuration):
     }
 
     try:
-        access_token = get_access_token()
+        diagnostics["oauth_status"] = "attempted"
+        access_token, token_source = get_access_token_with_source()
+        diagnostics["oauth_status"] = "succeeded"
+        diagnostics["oauth_token_source"] = token_source
     except DarajaOAuthError:
+        diagnostics["oauth_status"] = "failed"
         raise DarajaRegistrationAuthenticationError(
             "Daraja sandbox authentication failed."
         ) from None
@@ -338,8 +432,12 @@ def register_c2b_urls(configuration):
     )
     try:
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            diagnostics["provider_http_status"] = getattr(
+                response, "status", None
+            )
             response_body = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as error:
+        diagnostics["provider_http_status"] = error.code
         try:
             error_body = error.read(MAX_RESPONSE_BYTES + 1)
         except (OSError, ValueError):
@@ -351,6 +449,10 @@ def register_c2b_urls(configuration):
             provider_message,
             provider_request_id,
         ) = _provider_http_error_details(error_body, configuration, access_token)
+        diagnostics["provider_error_code"] = provider_error_code
+        diagnostics["provider_message"] = provider_message
+        diagnostics["provider_request_id"] = provider_request_id
+        diagnostics["failure_category"] = "provider_http_error"
         raise DarajaRegistrationRequestError(
             f"Safaricom returned HTTP {error.code} during URL registration.",
             provider_http_status=error.code,
@@ -376,6 +478,18 @@ def register_c2b_urls(configuration):
         ) from None
 
     succeeded, response_code = _provider_response(response_body)
+    (
+        diagnostics["provider_error_code"],
+        diagnostics["provider_message"],
+        diagnostics["provider_request_id"],
+    ) = _provider_response_diagnostic_fields(
+        response_body, configuration, access_token
+    )
+    if succeeded:
+        diagnostics["outcome"] = "succeeded"
+        diagnostics["failure_category"] = None
+    else:
+        diagnostics["failure_category"] = "provider_rejected"
     message = (
         "Safaricom accepted the callback URL registration."
         if succeeded
@@ -391,3 +505,28 @@ def register_c2b_urls(configuration):
         "provider_response_code": response_code,
         "message": message,
     }
+
+
+def register_c2b_urls(configuration):
+    """Register C2B URLs and log sanitized diagnostics for each attempt."""
+    diagnostics = _registration_diagnostics(configuration)
+    try:
+        return _perform_registration(configuration, diagnostics)
+    except DarajaRegistrationConfigurationError:
+        diagnostics["failure_category"] = "configuration"
+        raise
+    except DarajaRegistrationAuthenticationError:
+        diagnostics["failure_category"] = "oauth"
+        raise
+    except DarajaRegistrationTimeoutError:
+        diagnostics["failure_category"] = "timeout"
+        raise
+    except DarajaRegistrationRequestError:
+        if diagnostics["failure_category"] == "unexpected_failure":
+            diagnostics["failure_category"] = "request"
+        raise
+    except DarajaRegistrationResponseError:
+        diagnostics["failure_category"] = "invalid_provider_response"
+        raise
+    finally:
+        _log_registration_diagnostics(diagnostics)
