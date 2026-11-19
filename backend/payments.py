@@ -1,3 +1,5 @@
+import hashlib
+import json
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -15,6 +17,7 @@ from models import (
     Lease,
     Payment,
     PaymentAllocation,
+    PaymentAllocationRequest,
     Property,
     Receipt,
     Tenant,
@@ -48,6 +51,18 @@ def _parse_amount(value, field, *, allow_zero=False):
 
 def _amount_sum(values):
     return sum((Decimal(value) for value in values), ZERO)
+
+
+def _allocation_request_hash(requested_by_charge):
+    normalized = [
+        {
+            "charge_id": charge_id,
+            "amount": format(amount, ".2f"),
+        }
+        for charge_id, amount in sorted(requested_by_charge.items())
+    ]
+    payload = json.dumps(normalized, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _tenant_to_dict(tenant):
@@ -232,6 +247,16 @@ def allocate_payment(payment_id):
     if payment.currency != "KES":
         return jsonify({"error": "Only KES payments can be allocated."}), 409
 
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+    if (
+        not idempotency_key
+        or len(idempotency_key) > 128
+        or any(ord(character) < 33 or ord(character) > 126 for character in idempotency_key)
+    ):
+        return jsonify({
+            "error": "A valid Idempotency-Key header of at most 128 visible ASCII characters is required."
+        }), 400
+
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not isinstance(data.get("allocations"), list):
         return jsonify({"error": "allocations must be a list."}), 400
@@ -253,6 +278,18 @@ def allocate_payment(payment_id):
         if error:
             return jsonify({"error": error}), 400
         requested_by_charge[charge_id] = amount
+
+    request_hash = _allocation_request_hash(requested_by_charge)
+    previous_request = PaymentAllocationRequest.query.filter_by(
+        payment_id=payment.id,
+        idempotency_key=idempotency_key,
+    ).first()
+    if previous_request is not None:
+        if previous_request.request_hash != request_hash:
+            return jsonify({
+                "error": "Idempotency-Key has already been used with different allocation data."
+            }), 409
+        return jsonify(previous_request.response_payload), 200
 
     charges = _charge_access_query(
         landlord_id,
@@ -296,6 +333,26 @@ def allocate_payment(payment_id):
                 ))
             else:
                 existing.amount = Decimal(existing.amount) + amount
+        db.session.flush()
+        db.session.expire(payment, ["allocations"])
+        response_payload = {
+            "message": "Payment allocated successfully.",
+            "payment": _payment_to_dict(payment),
+            "charge_balances": [
+                {
+                    "charge_id": charge_id,
+                    "paid_amount": str(balances_after[charge_id][0]),
+                    "outstanding_balance": str(balances_after[charge_id][1]),
+                }
+                for charge_id in requested_by_charge
+            ],
+        }
+        db.session.add(PaymentAllocationRequest(
+            payment_id=payment.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_payload=response_payload,
+        ))
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -305,18 +362,7 @@ def allocate_payment(payment_id):
         current_app.logger.exception("Payment allocation failed")
         return jsonify({"error": "Unable to allocate payment right now."}), 500
 
-    return jsonify({
-        "message": "Payment allocated successfully.",
-        "payment": _payment_to_dict(payment),
-        "charge_balances": [
-            {
-                "charge_id": charge_id,
-                "paid_amount": str(balances_after[charge_id][0]),
-                "outstanding_balance": str(balances_after[charge_id][1]),
-            }
-            for charge_id in requested_by_charge
-        ],
-    }), 200
+    return jsonify(response_payload), 200
 
 
 @payments_bp.get("")

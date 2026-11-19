@@ -3105,6 +3105,7 @@ function PaymentDetailsPage({ paymentId, onBack, onAllocated }) {
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const [showReceipt, setShowReceipt] = useState(false)
+  const allocationIdempotencyRef = useRef(null)
 
   useEffect(() => {
     let isCurrent = true
@@ -3198,6 +3199,16 @@ function PaymentDetailsPage({ paymentId, onBack, onAllocated }) {
       return
     }
 
+    const requestFingerprint = JSON.stringify(
+      [...requestAllocations].sort((first, second) => first.charge_id - second.charge_id),
+    )
+    if (allocationIdempotencyRef.current?.fingerprint !== requestFingerprint) {
+      allocationIdempotencyRef.current = {
+        fingerprint: requestFingerprint,
+        key: crypto.randomUUID(),
+      }
+    }
+
     if (savingRef.current) return
     savingRef.current = true
     setIsSaving(true)
@@ -3205,11 +3216,13 @@ function PaymentDetailsPage({ paymentId, onBack, onAllocated }) {
       const result = await apiRequest(`/api/payments/${encodeURIComponent(payment.id)}/allocations`, {
         method: 'POST',
         authenticated: true,
+        headers: { 'Idempotency-Key': allocationIdempotencyRef.current.key },
         body: { allocations: requestAllocations },
       })
       if (!result?.payment) {
         throw new Error('The allocation could not be confirmed. Refresh payment details before trying again.')
       }
+      allocationIdempotencyRef.current = null
       setAllocations({})
       setSuccessMessage(result.message || 'Payment allocation saved successfully.')
       onAllocated()

@@ -421,6 +421,10 @@ class Payment(db.Model):
 
     tenant = db.relationship("Tenant", back_populates="payments")
     allocations = db.relationship("PaymentAllocation", back_populates="payment")
+    allocation_requests = db.relationship(
+        "PaymentAllocationRequest",
+        back_populates="payment",
+    )
     receipt = db.relationship("Receipt", back_populates="payment", uselist=False)
     provider_attempts = db.relationship(
         "PaymentAttempt",
@@ -472,6 +476,38 @@ class PaymentAllocation(db.Model):
             name="uq_payment_allocation_charge",
         ),
         CheckConstraint("amount > 0", name="ck_payment_allocation_positive"),
+    )
+
+
+class PaymentAllocationRequest(db.Model):
+    """Idempotency record for one successful allocation request."""
+
+    __tablename__ = "payment_allocation_requests"
+
+    id = db.Column(db.Integer, primary_key=True)
+    payment_id = db.Column(
+        db.Integer,
+        db.ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    idempotency_key = db.Column(db.String(128), nullable=False)
+    request_hash = db.Column(db.String(64), nullable=False)
+    response_payload = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    payment = db.relationship("Payment", back_populates="allocation_requests")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "payment_id",
+            "idempotency_key",
+            name="uq_payment_allocation_request_key",
+        ),
     )
 
 

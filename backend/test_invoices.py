@@ -19,6 +19,7 @@ from models import (
     Lease,
     Payment,
     PaymentAllocation,
+    PaymentAllocationRequest,
     Property,
     Receipt,
     Tenant,
@@ -49,6 +50,9 @@ def cleanup_records(app):
 
     with app.app_context():
         if records["payments"]:
+            PaymentAllocationRequest.query.filter(
+                PaymentAllocationRequest.payment_id.in_(records["payments"])
+            ).delete(synchronize_session=False)
             PaymentAllocation.query.filter(
                 PaymentAllocation.payment_id.in_(records["payments"])
             ).delete(synchronize_session=False)
@@ -770,7 +774,7 @@ def test_invoice_display_status_tracks_lifecycle_balance_and_due_date(
                     {"charge_id": charge_id, "amount": "5000.00"}
                 ]
             },
-            headers=headers,
+            headers={**headers, "Idempotency-Key": "invoice-lifecycle-partial-allocation"},
         )
         assert partial_allocation.status_code == 200
 
@@ -819,7 +823,7 @@ def test_invoice_display_status_tracks_lifecycle_balance_and_due_date(
                     {"charge_id": charge_id, "amount": "10000.00"}
                 ]
             },
-            headers=headers,
+            headers={**headers, "Idempotency-Key": "invoice-lifecycle-full-allocation"},
         )
         assert full_allocation.status_code == 200
 

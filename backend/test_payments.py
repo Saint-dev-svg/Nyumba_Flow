@@ -16,6 +16,7 @@ from models import (
     Lease,
     Payment,
     PaymentAllocation,
+    PaymentAllocationRequest,
     Property,
     Receipt,
     Tenant,
@@ -46,6 +47,9 @@ def cleanup_records(app):
 
     with app.app_context():
         if records["payments"]:
+            PaymentAllocationRequest.query.filter(
+                PaymentAllocationRequest.payment_id.in_(records["payments"])
+            ).delete(synchronize_session=False)
             PaymentAllocation.query.filter(
                 PaymentAllocation.payment_id.in_(records["payments"])
             ).delete(synchronize_session=False)
@@ -211,6 +215,21 @@ def record_payment(client, headers, tenant_id, amount="1000.00"):
     )
 
 
+def allocation_headers(headers, idempotency_key=None):
+    return {
+        **headers,
+        "Idempotency-Key": idempotency_key or str(uuid.uuid4()),
+    }
+
+
+def post_allocation(client, headers, payment_id, allocations, idempotency_key):
+    return client.post(
+        f"/api/payments/{payment_id}/allocations",
+        json={"allocations": allocations},
+        headers=allocation_headers(headers, idempotency_key),
+    )
+
+
 def _run_competing_allocations(app, headers, payment_allocations, lock_table, lock_id):
     """Hold one target row until both independent request transactions are queued."""
     barrier = Barrier(len(payment_allocations) + 1)
@@ -226,17 +245,22 @@ def _run_competing_allocations(app, headers, payment_allocations, lock_table, lo
             {"row_id": lock_id},
         ).one()
 
-        def post_allocation(payment_id, allocations):
+        def post_allocation(payment_id, allocations, idempotency_key):
             barrier.wait(timeout=10)
             with app.test_client() as client:
                 return client.post(
                     f"/api/payments/{payment_id}/allocations",
                     json={"allocations": allocations},
-                    headers=headers,
+                    headers=allocation_headers(headers, idempotency_key),
                 )
 
-        for payment_id, allocations in payment_allocations:
-            futures.append(executor.submit(post_allocation, payment_id, allocations))
+        for payment_id, allocations, idempotency_key in payment_allocations:
+            futures.append(executor.submit(
+                post_allocation,
+                payment_id,
+                allocations,
+                idempotency_key,
+            ))
         barrier.wait(timeout=10)
 
         deadline = monotonic() + 15
@@ -400,7 +424,7 @@ def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_r
                     {"charge_id": utilities_charge["id"], "amount": "300.00"},
                 ]
             },
-            headers=headers,
+            headers=allocation_headers(headers),
         )
 
         invoice_response = client.get(
@@ -433,6 +457,155 @@ def test_payment_allocates_partially_and_returns_decimal_balances(app, cleanup_r
     assert utilities_invoice_data["outstanding_balance"] == "400.00"
 
 
+def test_repeated_allocation_request_is_idempotent(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease.id)
+        cleanup_records["invoices"].add(invoice["id"])
+        allocations = [
+            {"charge_id": invoice["charges"][0]["id"], "amount": "300.00"}
+        ]
+        recorded = record_payment(client, headers, tenant.id, "1000.00")
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+        key = "same-allocation-retry"
+
+        first = post_allocation(client, headers, payment["id"], allocations, key)
+        retry = post_allocation(client, headers, payment["id"], allocations, key)
+
+    assert first.status_code == retry.status_code == 200
+    assert retry.get_json() == first.get_json()
+    with app.app_context():
+        allocation = PaymentAllocation.query.filter_by(
+            payment_id=payment["id"],
+            charge_id=allocations[0]["charge_id"],
+        ).one()
+        assert Decimal(allocation.amount) == Decimal("300.00")
+
+
+def test_new_allocation_key_can_allocate_additional_amount(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease.id)
+        cleanup_records["invoices"].add(invoice["id"])
+        charge_id = invoice["charges"][0]["id"]
+        recorded = record_payment(client, headers, tenant.id, "1000.00")
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+        first = post_allocation(
+            client, headers, payment["id"],
+            [{"charge_id": charge_id, "amount": "300.00"}],
+            "allocation-request-one",
+        )
+        second = post_allocation(
+            client, headers, payment["id"],
+            [{"charge_id": charge_id, "amount": "200.00"}],
+            "allocation-request-two",
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert second.get_json()["payment"]["allocated_amount"] == "500.00"
+    with app.app_context():
+        allocation = PaymentAllocation.query.filter_by(
+            payment_id=payment["id"],
+            charge_id=charge_id,
+        ).one()
+        assert Decimal(allocation.amount) == Decimal("500.00")
+
+
+def test_idempotency_key_rejects_different_allocation_data(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease.id)
+        cleanup_records["invoices"].add(invoice["id"])
+        charge_id = invoice["charges"][0]["id"]
+        recorded = record_payment(client, headers, tenant.id, "1000.00")
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+        key = "allocation-payload-mismatch"
+
+        first = post_allocation(
+            client, headers, payment["id"],
+            [{"charge_id": charge_id, "amount": "300.00"}],
+            key,
+        )
+        mismatch = post_allocation(
+            client, headers, payment["id"],
+            [{"charge_id": charge_id, "amount": "400.00"}],
+            key,
+        )
+
+    assert first.status_code == 200
+    assert mismatch.status_code == 409
+    assert mismatch.get_json() == {
+        "error": "Idempotency-Key has already been used with different allocation data."
+    }
+    with app.app_context():
+        allocation = PaymentAllocation.query.filter_by(
+            payment_id=payment["id"],
+            charge_id=charge_id,
+        ).one()
+        assert Decimal(allocation.amount) == Decimal("300.00")
+
+
+def test_concurrent_duplicate_requests_apply_allocation_once(app, cleanup_records):
+    with app.app_context():
+        landlord = create_landlord()
+        tenant = create_tenant(landlord.id)
+        property_obj, unit, lease = create_active_lease(landlord.id, tenant)
+        record_setup(cleanup_records, landlord, tenant, property_obj, unit, lease)
+        headers = auth_headers(landlord.id)
+
+    with app.test_client() as client:
+        invoice = create_issued_invoice(client, headers, lease.id)
+        cleanup_records["invoices"].add(invoice["id"])
+        charge_id = invoice["charges"][0]["id"]
+        recorded = record_payment(client, headers, tenant.id, "1000.00")
+        payment = recorded.get_json()["payment"]
+        cleanup_records["payments"].add(payment["id"])
+
+    key = "concurrent-same-allocation"
+    allocations = [{"charge_id": charge_id, "amount": "300.00"}]
+    responses = _run_competing_allocations(
+        app,
+        headers,
+        [
+            (payment["id"], allocations, key),
+            (payment["id"], allocations, key),
+        ],
+        "payments",
+        payment["id"],
+    )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert responses[0].get_json() == responses[1].get_json()
+    with app.app_context():
+        allocation = PaymentAllocation.query.filter_by(
+            payment_id=payment["id"],
+            charge_id=charge_id,
+        ).one()
+        assert Decimal(allocation.amount) == Decimal("300.00")
+
+
 def test_allocations_cannot_exceed_payment_amount(app, cleanup_records):
     with app.app_context():
         landlord = create_landlord()
@@ -454,12 +627,12 @@ def test_allocations_cannot_exceed_payment_amount(app, cleanup_records):
         response = client.post(
             f"/api/payments/{payment['id']}/allocations",
             json={"allocations": [{"charge_id": rent_charge["id"], "amount": "700.01"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
         valid_after_rejection = client.post(
             f"/api/payments/{payment['id']}/allocations",
             json={"allocations": [{"charge_id": rent_charge["id"], "amount": "700.00"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
 
     assert response.status_code == 409
@@ -488,12 +661,12 @@ def test_allocations_cannot_exceed_charge_outstanding_balance(app, cleanup_recor
         first_allocation = client.post(
             f"/api/payments/{first_payment['id']}/allocations",
             json={"allocations": [{"charge_id": rent_charge["id"], "amount": "5000.00"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
         over_balance = client.post(
             f"/api/payments/{second_payment['id']}/allocations",
             json={"allocations": [{"charge_id": rent_charge["id"], "amount": "4000.01"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
 
     assert first_allocation.status_code == 200
@@ -530,7 +703,7 @@ def test_allocations_reject_non_issued_invoice_charges(
         response = client.post(
             f"/api/payments/{payment['id']}/allocations",
             json={"allocations": [{"charge_id": charge["id"], "amount": "500.00"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
 
     assert response.status_code == 404
@@ -564,8 +737,8 @@ def test_concurrent_allocations_cannot_exceed_payment_balance(app, cleanup_recor
         app,
         headers,
         [
-            (payment_id, [{"charge_id": rent["id"], "amount": "700.00"}]),
-            (payment_id, [{"charge_id": utilities["id"], "amount": "700.00"}]),
+            (payment_id, [{"charge_id": rent["id"], "amount": "700.00"}], "payment-balance-rent"),
+            (payment_id, [{"charge_id": utilities["id"], "amount": "700.00"}], "payment-balance-utilities"),
         ],
         "payments",
         payment_id,
@@ -603,7 +776,7 @@ def test_concurrent_allocations_cannot_exceed_charge_balance(app, cleanup_record
         initial_allocation = client.post(
             f"/api/payments/{initial_id}/allocations",
             json={"allocations": [{"charge_id": rent["id"], "amount": "7500.00"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
         assert initial_allocation.status_code == 200
 
@@ -618,7 +791,7 @@ def test_concurrent_allocations_cannot_exceed_charge_balance(app, cleanup_record
         app,
         headers,
         [
-            (payment_id, [{"charge_id": rent["id"], "amount": "400.00"}])
+            (payment_id, [{"charge_id": rent["id"], "amount": "400.00"}], str(uuid.uuid4()))
             for payment_id in competing_payment_ids
         ],
         "charges",
@@ -665,7 +838,7 @@ def test_landlord_cannot_record_or_allocate_for_another_landlord(app, cleanup_re
                     {"charge_id": invoice_b["charges"][0]["id"], "amount": "500.00"}
                 ]
             },
-            headers=headers_a,
+            headers=allocation_headers(headers_a),
         )
 
     assert foreign_tenant_payment.status_code == 404
@@ -758,7 +931,7 @@ def test_get_payment_returns_details_and_allocation_history(app, cleanup_records
         allocation = client.post(
             f"/api/payments/{payment['id']}/allocations",
             json={"allocations": [{"charge_id": charge["id"], "amount": "500.00"}]},
-            headers=headers,
+            headers=allocation_headers(headers),
         )
         assert allocation.status_code == 200
         response = client.get(f"/api/payments/{payment['id']}", headers=headers)
@@ -920,4 +1093,3 @@ def test_manager_is_forbidden_from_payment_management_routes(app, cleanup_record
         ]
 
     assert [response.status_code for response in responses] == [403] * 5
-
